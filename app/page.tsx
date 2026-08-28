@@ -40,6 +40,12 @@ export default function Home() {
         >
           Mình đi đâu đây? 🧳
         </Link>
+        <Link
+          href="/journal"
+          className="rounded-full bg-gradient-to-r from-pink-500 to-rose-400 px-8 py-4 text-center text-lg font-semibold text-white shadow-lg shadow-pink-200 transition-all hover:shadow-xl hover:brightness-105 active:scale-95"
+        >
+          Nhật ký tình yêu 💌
+        </Link>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-sm text-gray-400">
