@@ -5,7 +5,7 @@ export default function MealCard({
   onToggleFavorite,
 }: {
   food: Food;
-  onToggleFavorite: (id: number) => void;
+  onToggleFavorite: (id: string) => void;
 }) {
   return (
     <div className="flex flex-col gap-2 rounded-2xl border border-pink-100 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">

@@ -1,14 +1,19 @@
 "use client";
 import { useState } from "react";
-import { foods, type Food } from "@/lib/foodData";
+import type { Food } from "@/lib/foodData";
 
-export default function Randomizer({ category = "all" }: { category?: string }) {
+export default function Randomizer({
+  category = "all",
+  foods = [],
+}: {
+  category?: string;
+  foods?: Food[];
+}) {
   const [choice, setChoice] = useState<Food | null>(null);
   const [rolling, setRolling] = useState(false);
 
   const pick = () => {
     setRolling(true);
-    // small pause to make it feel fun, then pick
     setTimeout(() => {
       const pool = category === "all" ? foods : foods.filter((f) => f.category === category);
       const random = pool[Math.floor(Math.random() * pool.length)];
@@ -23,7 +28,7 @@ export default function Randomizer({ category = "all" }: { category?: string }) 
 
       <button
         onClick={pick}
-        disabled={rolling}
+        disabled={rolling || foods.length === 0}
         className="rounded-full bg-pink-500 px-8 py-4 text-lg font-semibold text-white shadow-lg shadow-pink-200 transition-all hover:bg-pink-600 hover:shadow-xl active:scale-95 disabled:opacity-60"
       >
         {rolling ? "Đang chọn..." : "Chọn đại đi ❤️"}

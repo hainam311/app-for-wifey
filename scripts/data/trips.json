@@ -1,0 +1,62 @@
+[
+  {
+    "city": "Đà Nẵng",
+    "place": "bảo tàng",
+    "went": false
+  },
+  {
+    "city": "",
+    "place": "CF muối",
+    "went": false
+  },
+  {
+    "city": "Hội An",
+    "place": "Cf muối",
+    "went": true
+  },
+  {
+    "city": "",
+    "place": "Đồng Văn",
+    "went": true
+  },
+  {
+    "city": "Đà Nẵng",
+    "place": "On the Radio",
+    "went": true
+  },
+  {
+    "city": "",
+    "place": "Cù Lao Chàm",
+    "went": false
+  },
+  {
+    "city": "Hội An",
+    "place": "Cf Đi trốn",
+    "went": true
+  },
+  {
+    "city": "",
+    "place": "Lũng Cú",
+    "went": true
+  },
+  {
+    "city": "Đà Nẵng",
+    "place": "chơi game Lotte",
+    "went": false
+  },
+  {
+    "city": "Hội An",
+    "place": "Lăng Cô",
+    "went": true
+  },
+  {
+    "city": "Đà Nẵng",
+    "place": "hải sản bé Hon",
+    "went": false
+  },
+  {
+    "city": "Hội An",
+    "place": "Bạch Mã",
+    "went": false
+  }
+]

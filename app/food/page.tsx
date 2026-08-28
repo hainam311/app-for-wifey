@@ -1,17 +1,35 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import { collection, onSnapshot, updateDoc, doc } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import MealCard from "@/components/MealCard";
 import Randomizer from "@/components/Randomizer";
-import { CATEGORIES, foods, type Food } from "@/lib/foodData";
+import { CATEGORIES, type Food } from "@/lib/foodData";
 
 export default function FoodPage() {
   const [activeCategory, setActiveCategory] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const [items, setItems] = useState<Food[]>(foods);
+  const [items, setItems] = useState<Food[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const toggleFavorite = (id: number) => {
-    setItems((prev) => prev.map((f) => (f.id === id ? { ...f, is_favorite: !f.is_favorite } : f)));
+  // Load foods from Firestore (realtime)
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "foods"), (snapshot) => {
+      const list = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...(d.data() as Omit<Food, "id">),
+      }));
+      setItems(list);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  const toggleFavorite = async (id: string) => {
+    const current = items.find((f) => f.id === id);
+    if (!current) return;
+    await updateDoc(doc(db, "foods", id), { is_favorite: !current.is_favorite });
   };
 
   const filtered = useMemo(() => {
@@ -33,7 +51,7 @@ export default function FoodPage() {
         </p>
       </header>
 
-      <Randomizer category={activeCategory} />
+      <Randomizer category={activeCategory} foods={items} />
 
       <div className="flex flex-wrap gap-2">
         {CATEGORIES.map((cat) => (
@@ -75,7 +93,9 @@ export default function FoodPage() {
         />
       </div>
 
-      {filtered.length === 0 ? (
+      {loading ? (
+        <p className="py-12 text-center text-gray-400">Đang tải...</p>
+      ) : filtered.length === 0 ? (
         <p className="py-12 text-center text-gray-400">
           Không tìm thấy món nào. Thử đổi bộ lọc nhé ~ 🌸
         </p>
