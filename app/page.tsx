@@ -34,6 +34,12 @@ export default function Home() {
         >
           Ước mơ của em 🎁
         </Link>
+        <Link
+          href="/trips"
+          className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 transition-all hover:bg-pink-50 active:scale-95"
+        >
+          Mình đi đâu đây? 🧳
+        </Link>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-sm text-gray-400">
