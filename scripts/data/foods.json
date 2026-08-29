@@ -922,5 +922,161 @@
     "category": "lunch_dinner",
     "location": "cơm tấm 1940 - Đống Đa",
     "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Đà cafe",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Cafe muối xóm Nội",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Starbuck",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Daon",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "quán hẻm gần nhà Linh (mới ngồi sáng nay)",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "L'amite",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "tiệm Kiết",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "nhà Cá",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Khâu cafe",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Gé cafe",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Lãng cafe",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Trung Nguyên Lương Nhữ Hộc",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "cf Tiểu La",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "cf góc ĐH Ngoại Ngữ",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "cf muối Văn Cận",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "cf muối Lê Vĩnh Huy",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Nối cafe",
+    "is_favorite": false
+  },
+  {
+    "name": "Cafe ☕",
+    "category": "drink",
+    "location": "Trung Nguyên Đống Đa",
+    "is_favorite": false
+  },
+  {
+    "name": "Beer / Cocktail 🍺",
+    "category": "drink",
+    "location": "Son Tra retreat",
+    "is_favorite": false
+  },
+  {
+    "name": "Beer / Cocktail 🍺",
+    "category": "drink",
+    "location": "1920",
+    "is_favorite": false
+  },
+  {
+    "name": "Beer / Cocktail 🍺",
+    "category": "drink",
+    "location": "Libre",
+    "is_favorite": false
+  },
+  {
+    "name": "Beer / Cocktail 🍺",
+    "category": "drink",
+    "location": "Tailor",
+    "is_favorite": false
+  },
+  {
+    "name": "Beer / Cocktail 🍺",
+    "category": "drink",
+    "location": "Nóc nóc",
+    "is_favorite": false
+  },
+  {
+    "name": "Beer / Cocktail 🍺",
+    "category": "drink",
+    "location": "Anchor",
+    "is_favorite": false
+  },
+  {
+    "name": "Kem 🍨",
+    "category": "dessert",
+    "location": "Kem Sài Gòn",
+    "is_favorite": false
+  },
+  {
+    "name": "Kem 🍨",
+    "category": "dessert",
+    "location": "Kem Phan Thành Tài",
+    "is_favorite": false
   }
 ]

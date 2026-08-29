@@ -3,7 +3,7 @@
  * them into Firebase Firestore collections.
  *
  * Usage:
- *   node scripts/seed.mjs
+ *   node scripts/seed.mjs [--clear]
  *
  * Reads Firebase config from .env.local automatically (so secrets stay in
  * that file and are never printed).
@@ -12,8 +12,14 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, addDoc } from "firebase/firestore";
-
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  getDocs,
+  deleteDoc,
+  doc,
+} from "firebase/firestore";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = join(__dirname, "..");
 
@@ -77,7 +83,19 @@ async function seed(collectionName, items) {
   console.log(`  ${collectionName}: seeded ${ok} docs`);
 }
 
+async function clearCollection(collectionName) {
+  const ref = collection(db, collectionName);
+  const snap = await getDocs(ref);
+  let n = 0;
+  for (const d of snap.docs) {
+    await deleteDoc(doc(db, collectionName, d.id));
+    n++;
+  }
+  if (n) console.log(`  ${collectionName}: cleared ${n} old docs`);
+}
+
 async function main() {
+  const clearFirst = process.argv.includes("--clear");
   console.log("Connecting to Firebase project:", env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
   for (const { collection, file } of JOBS) {
     const path = join(DATA_DIR, file);
@@ -88,6 +106,7 @@ async function main() {
     const items = JSON.parse(readFileSync(path, "utf-8"));
     console.log(`Processing ${collection} (${items.length} items)...`);
     try {
+      if (clearFirst) await clearCollection(collection);
       await seed(collection, items);
     } catch (e) {
       console.error(`  FAILED ${collection}:`, e?.message || e);
@@ -98,3 +117,4 @@ async function main() {
 }
 
 main();
+

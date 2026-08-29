@@ -132,6 +132,43 @@ def extract_foods(z, shared, rid_target, sheet_rid):
                 })
     return foods
 
+# ---------- DRINK (and Dessert inside the Drink tab) ----------
+def extract_drinks(z, shared, rid_target, sheet_rid):
+    """Reads the 'Drink' tab. Each column is a category (Cafe / Beer-Cocktail / Kem)
+    and the cells below each header are the names of places/brands."""
+    if "Drink" not in sheet_rid:
+        return []
+    grid = _sheet_grid(z, rid_target[sheet_rid["Drink"]], shared)
+    if not grid:
+        return []
+    header = grid[0]
+    # Map each header label to (dish label shown in UI, Food category).
+    cat_map = {
+        "Cafe": ("Cafe ☕", "drink"),
+        "Beer/ Cocktail": ("Beer / Cocktail 🍺", "drink"),
+        "Beer/Cocktail": ("Beer / Cocktail 🍺", "drink"),
+        "Kem": ("Kem 🍨", "dessert"),
+    }
+    drinks = []
+    for ci, cell in enumerate(header):
+        cat_name = str(cell).strip()
+        if cat_name not in cat_map:
+            continue
+        dish, category = cat_map[cat_name]
+        for row in grid[1:]:
+            loc = str(row[ci]).strip() if ci < len(row) else ""
+            # Skip empty / "0" placeholders. Keep pure numbers on purpose
+            # (e.g. the bar "1920") unlike the Breakfast subtotal counts.
+            if not loc or loc in ("0",):
+                continue
+            drinks.append({
+                "name": dish,
+                "category": category,
+                "location": loc,
+                "is_favorite": False,
+            })
+    return drinks
+
 # ---------- TRIPS ----------
 def extract_trips(z, shared, rid_target, sheet_rid):
     if "Dự định đi" not in sheet_rid:
@@ -194,7 +231,8 @@ def main():
         shared = _shared_strings(z)
         rid_target, sheet_rid = _sheet_targets(z)
         data = {
-            "foods": extract_foods(z, shared, rid_target, sheet_rid),
+            "foods": extract_foods(z, shared, rid_target, sheet_rid)
+                     + extract_drinks(z, shared, rid_target, sheet_rid),
             "trips": extract_trips(z, shared, rid_target, sheet_rid),
             "wishlist": extract_wishlist(z, shared, rid_target, sheet_rid),
             "journal": extract_journal(z, shared, rid_target, sheet_rid),
