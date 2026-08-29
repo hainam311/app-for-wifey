@@ -23,7 +23,8 @@ type Post = {
 
 const APP_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD || "";
 const DEFAULT_AUTHOR = "Em ❤️";
-const ANNIVERSARY = "2022-10-27"; // edit this to your real anniversary
+
+const ANNIVERSARY = "2022-09-05"; // ngày đầu tiên yêu nhau
 
 function daysUntilAnniversary(): number {
   const now = new Date();
@@ -130,9 +131,10 @@ export default function JournalPage() {
       <header className="flex flex-col gap-1">
         <h1 className="text-3xl font-bold text-zinc-800">💌 Nhật ký tình yêu</h1>
         <p className="mt-1 text-gray-500">
-          Ngày {daysUntilAnniversary()} nữa là kỷ niệm của tụi mình ❤️
+          {daysUntilAnniversary() === 0
+            ? "Hôm nay là ngày đầu tiên yêu nhau — mừng kỷ niệm 5/9 thật vui nhé! 🎉❤️"
+            : `Còn ${daysUntilAnniversary()} ngày nữa là kỷ niệm 5/9 — ngày đầu tiên yêu nhau ❤️`}
         </p>
-        <p className="text-sm text-gray-400">(đổi ngày kỷ niệm trong code nếu chưa đúng nhé)</p>
       </header>
 
       {/* Composer */}
