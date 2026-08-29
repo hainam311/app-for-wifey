@@ -3,10 +3,11 @@
  * them into Firebase Firestore collections.
  *
  * Usage:
- *   node scripts/seed.mjs [--clear]
+ *   node scripts/seed.mjs                 # append-only, NEVER deletes anything
+ *   node scripts/seed.mjs --clear=foods   # clear ONLY named collection(s) first
  *
- * Reads Firebase config from .env.local automatically (so secrets stay in
- * that file and are never printed).
+ * SAFETY: by default this script is append-only. "journal" is user-generated
+ * (entries written inside the app) — never clear it without meaning to.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -95,8 +96,16 @@ async function clearCollection(collectionName) {
 }
 
 async function main() {
-  const clearFirst = process.argv.includes("--clear");
+  // --clear only wipes the collections explicitly named, e.g. --clear=foods,trips.
+  const clearFlag = process.argv.find((a) => a.startsWith("--clear"));
+  const clearSet = new Set(
+    clearFlag
+      ? clearFlag
+          .split("=")[1] && clearFlag.split("=")[1].split(",")
+      : []
+  );
   console.log("Connecting to Firebase project:", env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+  if (clearSet.size) console.log("Will clear collection(s):", [...clearSet].join(", "));
   for (const { collection, file } of JOBS) {
     const path = join(DATA_DIR, file);
     if (!existsSync(path)) {
@@ -106,7 +115,7 @@ async function main() {
     const items = JSON.parse(readFileSync(path, "utf-8"));
     console.log(`Processing ${collection} (${items.length} items)...`);
     try {
-      if (clearFirst) await clearCollection(collection);
+      if (clearSet.has(collection)) await clearCollection(collection);
       await seed(collection, items);
     } catch (e) {
       console.error(`  FAILED ${collection}:`, e?.message || e);
