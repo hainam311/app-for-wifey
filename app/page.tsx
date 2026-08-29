@@ -46,6 +46,12 @@ export default function Home() {
         >
           Nhật ký tình yêu 💌
         </Link>
+        <Link
+          href="/drink-prefs"
+          className="rounded-full border-2 border-pink-200 bg-pink-50 px-8 py-4 text-center text-lg font-semibold text-pink-400 transition-all hover:bg-pink-100 active:scale-95"
+        >
+          Bí kíp thức uống của em 🧋
+        </Link>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-sm text-gray-400">
