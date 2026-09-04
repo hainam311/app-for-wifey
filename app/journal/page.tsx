@@ -8,7 +8,6 @@ import {
   onSnapshot,
   query,
   orderBy,
-  serverTimestamp,
   increment,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
@@ -21,7 +20,6 @@ type Post = {
   hearts: number;
 };
 
-const APP_PASSWORD = process.env.NEXT_PUBLIC_APP_PASSWORD || "";
 const DEFAULT_AUTHOR = "Em ❤️";
 
 const ANNIVERSARY = "2022-09-05"; // ngày đầu tiên yêu nhau
@@ -36,28 +34,12 @@ function daysUntilAnniversary(): number {
 }
 
 export default function JournalPage() {
-  const [unlocked, setUnlocked] = useState(false);
-  const [passcode, setPasscode] = useState("");
-  const [passError, setPassError] = useState("");
-
   const [author, setAuthor] = useState(DEFAULT_AUTHOR);
   const [message, setMessage] = useState("");
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const unlock = (e: FormEvent) => {
-    e.preventDefault();
-    setPassError("");
-    if (passcode === APP_PASSWORD) {
-      setUnlocked(true);
-    } else {
-      setPassError("Hmm, hình như không đúng. Thử lại nhé 😉");
-      setPasscode("");
-    }
-  };
-
   useEffect(() => {
-    if (!unlocked) return;
     const q = query(collection(db, "journal"), orderBy("date", "desc"));
     const unsub = onSnapshot(q, (snap) => {
       const items = snap.docs.map((d) => ({
@@ -68,7 +50,7 @@ export default function JournalPage() {
       setLoading(false);
     });
     return () => unsub();
-  }, [unlocked]);
+  }, []);
 
   const handlePost = async (e: FormEvent) => {
     e.preventDefault();
@@ -94,38 +76,6 @@ export default function JournalPage() {
     return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" });
   };
 
-  // ---- Locked screen ----
-  if (!unlocked) {
-    return (
-      <main className="mx-auto flex w-full max-w-sm flex-1 flex-col items-center justify-center gap-6 px-4 py-16 text-center">
-        <p className="text-sm uppercase tracking-widest text-pink-400">
-          Một nơi chỉ dành cho hai đứa
-        </p>
-        <h1 className="text-3xl font-bold text-zinc-800">💌 Gửi em / Gửi anh</h1>
-        <p className="text-gray-500">
-          Nhập mật khẩu của hai đứa mình để mở cửa trái tim nhé.
-        </p>
-        <form onSubmit={unlock} className="flex w-full flex-col gap-3">
-          <input
-            type="password"
-            value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
-            placeholder="Mật khẩu thần kỳ..."
-            className="w-full rounded-full border border-pink-100 bg-white px-5 py-3 text-center text-lg text-gray-700 placeholder-gray-400 shadow-sm outline-none focus:border-pink-400"
-          />
-          {passError && <p className="text-sm text-pink-500">{passError}</p>}
-          <button
-            type="submit"
-            className="mt-2 rounded-full bg-pink-500 px-6 py-3 font-semibold text-white shadow-lg shadow-pink-200 transition-all hover:bg-pink-600 active:scale-95"
-          >
-            Mở khóa 💝
-          </button>
-        </form>
-      </main>
-    );
-  }
-
-  // ---- Unlocked: the journal ----
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-10">
       <header className="flex flex-col gap-1">
