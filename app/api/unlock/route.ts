@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30, // stay unlocked ~30 days on this browser
+    maxAge: 60 * 60 * 24 * 7, // stay unlocked ~7 days on this browser
   });
   return res;
 }
