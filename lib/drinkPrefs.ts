@@ -1,8 +1,13 @@
-// "Linh thích mấy món ni nèee" — Linh's go-to drink orders, grouped by shop.
-// Nam mở này ra là biết đặt gì cho Linh uống nè ❤️
+// LEGACY STATIC BACKUP (no longer read by the page).
+// Linh's go-to drink orders, grouped by shop.
+//
+// ⚠️ Dữ liệu này giờ sống trong Firestore collection `shop_prefs`
+// (seed bởi scripts/data/shopPrefs.json, chạy qua scripts/seed.mjs).
+// File này giữ lại làm bản sao backup / tài liệu tham khảo.
 export type ShopPref = {
   shop: string;
   emoji: string;
+  sortOrder?: number;
   orders: string[];
 };
 
@@ -84,3 +89,4 @@ export const DRINK_PREFS: ShopPref[] = [
     orders: ["Hải Nam của Linh 😌"],
   },
 ];
+

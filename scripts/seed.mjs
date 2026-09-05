@@ -8,6 +8,8 @@
  *
  * SAFETY: by default this script is append-only. "journal" is user-generated
  * (entries written inside the app) — never clear it without meaning to.
+ * Live, app-made journal entries that are NOT in journal.json are backed up in
+ * scripts/data/journal_live_backup_2026.json — keep that file safe too!
  */
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -69,6 +71,7 @@ const JOBS = [
   { collection: "trips", file: "trips.json" },
   { collection: "wishlist", file: "wishlist.json" },
   { collection: "journal", file: "journal.json" },
+  { collection: "shop_prefs", file: "shopPrefs.json" },
 ];
 
 async function seed(collectionName, items) {
