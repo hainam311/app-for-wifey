@@ -10,7 +10,7 @@ import {
   orderBy,
   onSnapshot,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { authReady, db } from "@/lib/firebase";
 
 type ShopPref = {
   id: string;
@@ -56,16 +56,24 @@ export default function DrinkPrefsPage() {
 
   // Load home's "Bí kíp thức uống" from Firestore (realtime!)
   useEffect(() => {
-    const q = query(collection(db, "shop_prefs"), orderBy("sortOrder", "asc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<ShopPref, "id">),
-      }));
-      setPrefs(items);
-      setLoading(false);
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      const q = query(collection(db, "shop_prefs"), orderBy("sortOrder", "asc"));
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const items = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<ShopPref, "id">),
+        }));
+        setPrefs(items);
+        setLoading(false);
+      });
     });
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   const handleAdd = async (e: FormEvent) => {

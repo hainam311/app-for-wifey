@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState, useEffect } from "react";
 import { collection, onSnapshot, updateDoc, doc } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { authReady, db } from "@/lib/firebase";
 import MealCard from "@/components/MealCard";
 import Randomizer from "@/components/Randomizer";
 import { CATEGORIES, type Food } from "@/lib/foodData";
@@ -15,15 +15,23 @@ export default function FoodPage() {
 
   // Load foods from Firestore (realtime)
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, "foods"), (snapshot) => {
-      const list = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Food, "id">),
-      }));
-      setItems(list);
-      setLoading(false);
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      unsub = onSnapshot(collection(db, "foods"), (snapshot) => {
+        const list = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<Food, "id">),
+        }));
+        setItems(list);
+        setLoading(false);
+      });
     });
-    return () => unsub();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, []);
 
   const toggleFavorite = async (id: string) => {

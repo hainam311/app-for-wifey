@@ -9,7 +9,7 @@ import {
   query,
   orderBy,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { authReady, db } from "@/lib/firebase";
 
 type Todo = {
   id: string;
@@ -25,16 +25,24 @@ export default function TodoPage() {
 
   // Load todos from Firestore + listen for live updates (realtime!)
   useEffect(() => {
-    const q = query(collection(db, "todos"), orderBy("pinned", "desc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Todo, "id">),
-      }));
-      setTodos(items);
-      setLoading(false);
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      const q = query(collection(db, "todos"), orderBy("pinned", "desc"));
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const items = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<Todo, "id">),
+        }));
+        setTodos(items);
+        setLoading(false);
+      });
     });
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   // Add a new todo

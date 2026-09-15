@@ -7,7 +7,7 @@ import {
   onSnapshot,
   query,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { authReady, db } from "@/lib/firebase";
 
 type Trip = {
   id: string;
@@ -21,16 +21,24 @@ export default function TripsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, "trips"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Trip, "id">),
-      }));
-      setTrips(items);
-      setLoading(false);
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      const q = query(collection(db, "trips"));
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const items = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<Trip, "id">),
+        }));
+        setTrips(items);
+        setLoading(false);
+      });
     });
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   const toggleWent = async (trip: Trip) => {

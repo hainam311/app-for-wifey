@@ -9,7 +9,7 @@ import {
   query,
   orderBy,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { authReady, db } from "@/lib/firebase";
 
 type Wish = {
   id: string;
@@ -24,16 +24,24 @@ export default function WishlistPage() {
 
   // Listen for realtime updates from the wishlist collection
   useEffect(() => {
-    const q = query(collection(db, "wishlist"), orderBy("given", "asc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items = snapshot.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Wish, "id">),
-      }));
-      setWishes(items);
-      setLoading(false);
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      const q = query(collection(db, "wishlist"), orderBy("given", "asc"));
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const items = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<Wish, "id">),
+        }));
+        setWishes(items);
+        setLoading(false);
+      });
     });
-    return () => unsubscribe();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   const handleAdd = async (e: FormEvent) => {

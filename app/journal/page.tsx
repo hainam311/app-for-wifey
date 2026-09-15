@@ -10,7 +10,7 @@ import {
   orderBy,
   increment,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { authReady, db } from "@/lib/firebase";
 
 type Post = {
   id: string;
@@ -40,16 +40,24 @@ export default function JournalPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, "journal"), orderBy("date", "desc"));
-    const unsub = onSnapshot(q, (snap) => {
-      const items = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as Omit<Post, "id">),
-      }));
-      setPosts(items);
-      setLoading(false);
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      const q = query(collection(db, "journal"), orderBy("date", "desc"));
+      unsub = onSnapshot(q, (snap) => {
+        const items = snap.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<Post, "id">),
+        }));
+        setPosts(items);
+        setLoading(false);
+      });
     });
-    return () => unsub();
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, []);
 
   const handlePost = async (e: FormEvent) => {
