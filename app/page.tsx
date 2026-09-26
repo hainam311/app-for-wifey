@@ -47,6 +47,12 @@ export default function Home() {
           Nhật ký tình yêu 💌
         </Link>
         <Link
+          href="/game"
+          className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 transition-all hover:bg-pink-50 active:scale-95"
+        >
+          Lật hình Bubu &amp; Dudu 🐻🧸
+        </Link>
+        <Link
           href="/drink-prefs"
           className="rounded-full border-2 border-pink-200 bg-pink-50 px-8 py-4 text-center text-lg font-semibold text-pink-400 transition-all hover:bg-pink-100 active:scale-95"
         >
