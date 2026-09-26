@@ -2,13 +2,14 @@
 import { useState, useEffect, type FormEvent, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-// Front-door unlock screen — the single app-wide passcode.
+// Front-door unlock screen — each of us has our own passcode.
 function LockInner() {
   const router = useRouter();
   const params = useSearchParams();
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [greeting, setGreeting] = useState("");
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) =>
@@ -30,8 +31,18 @@ function LockInner() {
         body: JSON.stringify({ passcode: input, next: nextStr }),
       });
       if (r.ok) {
+        const { who } = (await r.json()) as { who: "nam" | "linh" };
+        setGreeting(who === "linh" ? "Chào Linh 🧸" : "Chào Nam 🐻");
+        await new Promise((res) => setTimeout(res, 800));
         router.push(nextStr.startsWith("/") ? nextStr : "/");
         router.refresh();
+      } else if (r.status === 429) {
+        const { retryAfterSec } = (await r.json()) as { retryAfterSec: number };
+        const minutes = Math.max(1, Math.ceil(retryAfterSec / 60));
+        setError(`Sai nhiều lần quá, đợi ${minutes} phút rồi thử lại nhé 🥺`);
+        setInput("");
+      } else if (r.status !== 401) {
+        setError("Có lỗi gì đó, thử lại nhé 🥺");
       } else {
         setError("Hình như chưa đúng nhé. Thử lại đi 😉");
         setInput("");
@@ -51,7 +62,7 @@ function LockInner() {
       <h1 className="text-3xl font-bold text-zinc-800">
         Nhà của Em &amp; Anh <span className="text-pink-500">❤️</span>
       </h1>
-      <p className="text-gray-500">Nhập mật khẩu của tụi mình để bước vào nhà nhé.</p>
+      <p className="text-gray-500">Nhập mật khẩu của mình để vào nhà nhé.</p>
       <form onSubmit={unlock} className="flex w-full flex-col gap-3">
         <input
           id="pw"
@@ -64,6 +75,7 @@ function LockInner() {
           className="w-full rounded-full border border-pink-100 bg-white px-5 py-3 text-center text-lg text-gray-700 placeholder-gray-400 shadow-sm outline-none focus:border-pink-400"
         />
         {error && <p className="text-sm text-pink-500">{error}</p>}
+        {greeting && <p className="text-lg font-semibold text-pink-500">{greeting}</p>}
         <button
           type="submit"
           disabled={busy}

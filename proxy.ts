@@ -1,12 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { verifyWho, WHO_COOKIE } from "@/lib/session";
 
 // Front-door passcode gate (server-side). Protects ALL pages — including the
 // server-rendered home & drink-prefs whose content would otherwise be baked
-// into the static HTML — by redirecting anyone without the unlock cookie to /lock.
-const COOKIE = "app_wifey_unlocked";
+// into the static HTML — by redirecting anyone without a valid, signed
+// "whose phone is this" cookie to /lock. (Next 16: formerly middleware.ts.)
 const PROTECTED_PREFIX = "/lock"; // never protect the lock page itself
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   // Skip API routes, Next.js internals and static files (so assets always load).
@@ -23,8 +24,8 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Already unlocked this session? Let them through.
-  if (req.cookies.get(COOKIE)?.value === "1") {
+  // Unlocked by Nam or Linh on this browser? Let them through.
+  if (verifyWho(req.cookies.get(WHO_COOKIE)?.value)) {
     return NextResponse.next();
   }
 
