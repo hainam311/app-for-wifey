@@ -11,6 +11,7 @@ import {
   increment,
 } from "firebase/firestore";
 import { authReady, db } from "@/lib/firebase";
+import { useMe, type Who } from "@/lib/useMe";
 
 type Post = {
   id: string;
@@ -20,7 +21,8 @@ type Post = {
   hearts: number;
 };
 
-const DEFAULT_AUTHOR = "Em ❤️";
+// Filled in from whose phone this is (per-person passcode); still editable.
+const AUTHOR_FOR: Record<Who, string> = { nam: "Anh ❤️", linh: "Em ❤️" };
 
 const ANNIVERSARY = "2022-09-05"; // ngày đầu tiên yêu nhau
 
@@ -34,7 +36,10 @@ function daysUntilAnniversary(): number {
 }
 
 export default function JournalPage() {
-  const [author, setAuthor] = useState(DEFAULT_AUTHOR);
+  const me = useMe();
+  // null = not edited by hand, so follow whoever unlocked this phone.
+  const [authorEdit, setAuthorEdit] = useState<string | null>(null);
+  const author = authorEdit ?? (me ? AUTHOR_FOR[me] : "");
   const [message, setMessage] = useState("");
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,7 +68,7 @@ export default function JournalPage() {
   const handlePost = async (e: FormEvent) => {
     e.preventDefault();
     const text = message.trim();
-    if (!text) return;
+    if (!text || !author.trim()) return;
     await addDoc(collection(db, "journal"), {
       author,
       message: text,
@@ -100,7 +105,7 @@ export default function JournalPage() {
         <input
           type="text"
           value={author}
-          onChange={(e) => setAuthor(e.target.value)}
+          onChange={(e) => setAuthorEdit(e.target.value)}
           placeholder="Tên em / tên anh"
           className="w-full rounded-full border border-pink-100 bg-pink-50/50 px-4 py-2 text-sm text-gray-600 placeholder-gray-400 outline-none focus:border-pink-300"
         />
