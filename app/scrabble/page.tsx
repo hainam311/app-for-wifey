@@ -1,5 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { doc, onSnapshot, runTransaction, setDoc } from "firebase/firestore";
+import { authReady, db } from "@/lib/firebase";
+import { useMe } from "@/lib/useMe";
 import { BOARD_SIZE, CENTER, MIN_BAG_TO_EXCHANGE } from "@/lib/scrabble/constants";
 import { isWordIn, loadDictionary } from "@/lib/scrabble/dictionary";
 import {
@@ -18,8 +22,14 @@ import {
 import Board from "./Board";
 import Rack from "./Rack";
 
-// Step 4: the game runs on local state only — one phone, both players take
-// turns on it, nothing is saved. Step 5 moves the state to Firestore.
+// One async game shared by both phones in scrabble_game/shared. Every move is
+// a transaction that re-reads the doc and runs the engine against that, so
+// the rules always check the latest board — never a stale copy on screen.
+const gameRef = doc(db, "scrabble_game", "shared");
+const FIRST_EVER_STARTER: Player = "linh"; // ladies first 💕
+
+// A rule refusal (not your turn, word not in the dictionary…) — shown as a toast.
+class GameRuleError extends Error {}
 
 const NAME: Record<Player, string> = { nam: "Nam", linh: "Linh" };
 const ICON: Record<Player, string> = { nam: "🐻", linh: "🧸" };
@@ -28,27 +38,55 @@ const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 type Pending = Placement & { slot: number }; // `slot` = where it came from on the rack
 
 export default function ScrabblePage() {
-  // The game is dealt in the browser once the word list is ready — dealing
-  // during server rendering would shuffle a different rack than the phone.
+  const me = useMe();
   const [game, setGame] = useState<ScrabbleState | null>(null);
   const [words, setWords] = useState<Set<string> | null>(null);
   const [dictError, setDictError] = useState(false);
 
   const fetchWords = () =>
     loadDictionary()
-      .then((loaded) => {
-        setWords(loaded);
-        setGame((g) => g ?? newGame("linh"));
-      })
+      .then(setWords)
       .catch((err) => {
         console.error("Could not load the word list:", err);
         setDictError(true);
       });
+
+  // Load the shared game (realtime!) and the word list; create the game the
+  // first time. Only in the browser, so the deal isn't shuffled twice.
   useEffect(() => {
     fetchWords();
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      unsub = onSnapshot(gameRef, (snap) => {
+        if (snap.exists()) {
+          setGame(snap.data() as ScrabbleState);
+        } else {
+          runTransaction(db, async (tx) => {
+            if (!(await tx.get(gameRef)).exists()) tx.set(gameRef, newGame(FIRST_EVER_STARTER));
+          }).catch((err) => console.error("Could not create game:", err));
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
   }, []);
 
-  if (!game || !words) {
+  if (me === null) {
+    return (
+      <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10 text-center">
+        <h1 className="text-3xl font-bold text-zinc-800">Scrabble with Love 💌</h1>
+        <Link href="/lock?next=/scrabble" className="py-12 text-rose-500 underline">
+          Chưa biết máy của ai 🤔 Mở khoá lại nhé
+        </Link>
+      </main>
+    );
+  }
+
+  if (!game || !words || me === undefined) {
     return (
       <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10">
         <h1 className="text-center text-3xl font-bold text-zinc-800">Scrabble with Love 💌</h1>
@@ -63,23 +101,19 @@ export default function ScrabblePage() {
             Không tải được từ điển, thử lại 🔄
           </button>
         ) : (
-          <p className="py-12 text-center text-gray-400">Đang tải từ điển...</p>
+          <p className="py-12 text-center text-gray-400">Đang tải...</p>
         )}
       </main>
     );
   }
-  return <ScrabbleGame game={game} setGame={setGame} words={words} />;
+  // A new key after every saved move remounts the game view, which clears
+  // the half-built move, selection, zoom and rack order for the next turn.
+  return (
+    <ScrabbleGame key={`${game.updatedAt}:${game.history.length}`} game={game} me={me} words={words} />
+  );
 }
 
-function ScrabbleGame({
-  game,
-  setGame,
-  words,
-}: {
-  game: ScrabbleState;
-  setGame: (state: ScrabbleState) => void;
-  words: Set<string>;
-}) {
+function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; words: Set<string> }) {
   const [pending, setPending] = useState<Pending[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [blankAt, setBlankAt] = useState<{ slot: number; index: number } | null>(null);
@@ -88,12 +122,12 @@ function ScrabbleGame({
   const [zoom, setZoom] = useState(false);
   const [shuffled, setShuffled] = useState<{ key: string; order: number[] } | null>(null);
   const [toast, setToast] = useState("");
+  const [busy, setBusy] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const boardBox = useRef<HTMLDivElement>(null);
   const autoZoomed = useRef(false); // auto-zoom once per turn; after that the 🔍 button decides
 
-  const me = game.turn; // Step 4: whoever's turn it is plays on this phone
-  const rack = game.racks[me];
+  const rack = game.racks[me]; // only ever your own rack
   const rackKey = `${game.history.length}:${me}`;
   const order =
     shuffled?.key === rackKey && shuffled.order.length === rack.length
@@ -102,6 +136,7 @@ function ScrabbleGame({
   const used = new Set(pending.map((p) => p.slot));
   const lastMove = game.history.at(-1)?.cells ?? [];
   const finished = game.status === "finished";
+  const myTurn = !finished && game.turn === me;
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
@@ -126,24 +161,34 @@ function ScrabbleGame({
     toastTimer.current = setTimeout(() => setToast(""), 2500);
   };
 
-  const resetTurn = () => {
-    setPending([]);
-    setSelected(null);
-    setBlankAt(null);
-    setExchanging(false);
-    setMarked(new Set());
-    setZoom(false);
-    autoZoomed.current = false;
-  };
-
-  const commit = (result: StateResult) => {
-    if (!result.ok) return showToast(result.reason);
-    setGame(result.state);
-    resetTurn();
+  // Runs one move as a transaction against the latest saved game. On success
+  // the snapshot brings the new state back and the view resets itself (see
+  // the key above); on a refusal the half-built move stays so it can be fixed.
+  const run = async (move: (state: ScrabbleState) => StateResult) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(gameRef);
+        if (!snap.exists()) throw new GameRuleError("Ván này không còn nữa, tải lại trang nhé 🔄");
+        const result = move(snap.data() as ScrabbleState);
+        if (!result.ok) throw new GameRuleError(result.reason);
+        tx.set(gameRef, result.state);
+      });
+    } catch (err) {
+      if (err instanceof GameRuleError) showToast(err.message);
+      else {
+        console.error("Move failed:", err);
+        showToast("Có lỗi gì đó, thử lại nhé 🥺");
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const tapRack = (slot: number) => {
     if (finished) return;
+    if (!myTurn) return showToast(`Đợi ${NAME[game.turn]} đánh xong đã nhé ⏳`);
     if (exchanging) {
       const next = new Set(marked);
       if (next.has(slot)) next.delete(slot);
@@ -161,6 +206,7 @@ function ScrabbleGame({
 
   const tapCell = (index: number) => {
     if (finished || exchanging) return;
+    if (!myTurn) return showToast(`Đợi ${NAME[game.turn]} đánh xong đã nhé ⏳`);
     const mine = pending.find((p) => p.index === index);
     if (mine) {
       setPending(pending.filter((p) => p !== mine)); // tap a tile placed this turn → back to the rack
@@ -183,19 +229,27 @@ function ScrabbleGame({
   };
 
   const play = () => {
-    commit(applyPlay(game, me, pending.map(({ index, tile, as }) => ({ index, tile, as })), isWordIn(words)));
+    const placements = pending.map(({ index, tile, as }) => (as ? { index, tile, as } : { index, tile }));
+    run((state) => applyPlay(state, me, placements, isWordIn(words)));
   };
 
-  const exchange = () => commit(applyExchange(game, me, [...marked].map((slot) => rack[slot])));
+  const exchange = () => {
+    const tiles = [...marked].map((slot) => rack[slot]);
+    run((state) => applyExchange(state, me, tiles));
+  };
 
   const pass = () => {
-    if (window.confirm("Bỏ lượt này hả? 🥺")) commit(applyPass(game, me));
+    if (window.confirm("Bỏ lượt này hả? 🥺")) run((state) => applyPass(state, me));
   };
 
-  const startNewGame = () => {
+  const startNewGame = async () => {
     if (!finished && game.history.length > 0 && !window.confirm("Bỏ ván này hả? 🥺")) return;
-    setGame(newGame(other(game.startedBy)));
-    resetTurn();
+    try {
+      await setDoc(gameRef, newGame(other(game.startedBy)));
+    } catch (err) {
+      console.error("Could not start a new game:", err);
+      showToast("Có lỗi gì đó, thử lại nhé 🥺");
+    }
   };
 
   // Live preview of the move being built (same rules the real move uses).
@@ -205,9 +259,6 @@ function ScrabbleGame({
   return (
     <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-8">
       <h1 className="text-center text-3xl font-bold text-zinc-800">Scrabble with Love 💌</h1>
-      <p className="-mt-2 text-center text-xs text-amber-600">
-        Bản chơi thử trên một máy — chưa lưu ván 🧪
-      </p>
 
       {/* Scoreboard */}
       <div className="flex items-center justify-center gap-4 text-lg">
@@ -226,7 +277,8 @@ function ScrabbleGame({
         </div>
       ) : (
         <p className="text-center text-sm text-gray-500">
-          Lượt của {NAME[me]} {ICON[me]} · Túi còn {game.bag.length} chữ
+          {myTurn ? `Lượt của ${NAME[me]} nè 💕` : `Đợi ${NAME[game.turn]} nhé ⏳`} · Túi còn{" "}
+          {game.bag.length} chữ
         </p>
       )}
 
@@ -266,7 +318,7 @@ function ScrabbleGame({
             <span className="text-gray-400">{preview.reason}</span>
           )
         ) : (
-          !finished && <span className="text-gray-400">Chạm một chữ, rồi chạm ô trên bàn</span>
+          myTurn && <span className="text-gray-400">Chạm một chữ, rồi chạm ô trên bàn</span>
         )}
       </p>
 
@@ -282,7 +334,7 @@ function ScrabbleGame({
           <div className="flex justify-center gap-2">
             <button
               onClick={exchange}
-              disabled={marked.size === 0}
+              disabled={marked.size === 0 || busy}
               className="rounded-full bg-pink-500 px-6 py-3 font-semibold text-white shadow-lg shadow-pink-200 transition-all active:scale-95 disabled:opacity-40"
             >
               Đổi {marked.size} chữ 🔄
@@ -301,10 +353,10 @@ function ScrabbleGame({
           <div className="flex flex-col gap-3">
             <button
               onClick={play}
-              disabled={!preview?.ok}
+              disabled={!myTurn || !preview?.ok || busy}
               className="rounded-full bg-pink-500 px-8 py-4 text-lg font-semibold text-white shadow-lg shadow-pink-200 transition-all hover:bg-pink-600 active:scale-95 disabled:opacity-40 disabled:shadow-none"
             >
-              Đánh {preview?.ok ? `+${preview.total}` : ""} 💌
+              {busy ? "Đang gửi..." : myTurn ? `Đánh ${preview?.ok ? `+${preview.total} ` : ""}💌` : `Đợi ${NAME[game.turn]} nhé ⏳`}
             </button>
             <div className="flex flex-wrap justify-center gap-2 text-sm">
               <button
@@ -329,14 +381,15 @@ function ScrabbleGame({
                   setSelected(null);
                   setExchanging(true);
                 }}
-                disabled={game.bag.length < MIN_BAG_TO_EXCHANGE}
+                disabled={!myTurn || game.bag.length < MIN_BAG_TO_EXCHANGE}
                 className="rounded-full border border-pink-200 bg-white px-3 py-1.5 text-pink-500 active:scale-95 disabled:opacity-40"
               >
                 🔄 Đổi chữ
               </button>
               <button
                 onClick={pass}
-                className="rounded-full border border-pink-200 bg-white px-3 py-1.5 text-pink-500 active:scale-95"
+                disabled={!myTurn || busy}
+                className="rounded-full border border-pink-200 bg-white px-3 py-1.5 text-pink-500 active:scale-95 disabled:opacity-40"
               >
                 ⏭️ Bỏ lượt
               </button>

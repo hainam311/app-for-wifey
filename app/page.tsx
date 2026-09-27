@@ -53,6 +53,12 @@ export default function Home() {
           Lật hình emoji 🐻
         </Link>
         <Link
+          href="/scrabble"
+          className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 transition-all hover:bg-pink-50 active:scale-95"
+        >
+          Scrabble with Love 💌
+        </Link>
+        <Link
           href="/drink-prefs"
           className="rounded-full border-2 border-pink-200 bg-pink-50 px-8 py-4 text-center text-lg font-semibold text-pink-400 transition-all hover:bg-pink-100 active:scale-95"
         >
