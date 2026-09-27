@@ -1,6 +1,6 @@
 import type { Who } from "@/lib/session"; // type-only: safe in client code
 
-// Lật hình Bubu & Dudu — pure game rules. No Firestore in here: the page runs
+// Lật hình emoji — pure game rules. No Firestore in here: the page runs
 // these inside a transaction and writes the returned state to
 // memory_game/shared, so both phones see every flip.
 export type Player = Who;
@@ -11,8 +11,11 @@ export const CARD_FACES = [
   "🐻", "🧸", "💕", "🍯", "🎀", "🍒", "🌙", "⭐",
   "🐰", "🐱", "🍓", "🌸", "🧁", "🍩", "🍭", "🦄",
   "🌈", "🐥", "🐼", "🍑", "🎈", "💌", "🍉", "🐧",
+  "🐶", "🐨", "🦊", "🐸", "🐤", "🦋", "🐝", "🌻",
+  "🌷", "🍀", "🍎", "🍋", "🍇", "🥑", "🍰", "🍪",
+  "🧋", "🍦", "☕", "🎁", "💎", "👑", "🎵", "🏖️",
 ];
-export const PAIRS = 8; // 4×4 board
+export const PAIRS = 18; // 6×6 board
 
 export const MISMATCH_SHOW_MS = 1000; // how long a wrong pair stays face-up
 // A mismatch older than this was abandoned (phone closed mid-turn); the next

@@ -40,4 +40,4 @@ A small private 2-person Next.js 16 (App Router, React 19, Tailwind v4) app. **T
 
 ## Planning docs (parent directory)
 
-`../app-for-wifey-architecture.md` is the detailed, maintained architecture doc — update it when architecture changes. `../app-for-wify-implementation-plan.md` (Bubu & Dudu memory-match game, single shared doc `memory_game/shared`) and `../app-for-wifey-english-word-board-game-plan.md` describe planned features; both put pure game logic in `lib/` separate from Firestore code.
+`../app-for-wifey-architecture.md` is the detailed, maintained architecture doc — update it when architecture changes. `../app-for-wify-implementation-plan.md` (the memory-match game now live at `/game`, originally planned as Bubu & Dudu) and `../app-for-wifey-english-word-board-game-plan.md` describe planned features; both put pure game logic in `lib/` separate from Firestore code.

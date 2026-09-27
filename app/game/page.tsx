@@ -116,7 +116,7 @@ export default function GamePage() {
   if (loading || !game || me === undefined) {
     return (
       <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10">
-        <h1 className="text-center text-3xl font-bold text-zinc-800">Lật hình Bubu &amp; Dudu 🐻🧸</h1>
+        <h1 className="text-center text-3xl font-bold text-zinc-800">Lật hình emoji 🐻</h1>
         <p className="py-12 text-center text-gray-400">Đang tải...</p>
       </main>
     );
@@ -128,7 +128,7 @@ export default function GamePage() {
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 py-10">
-      <h1 className="text-center text-3xl font-bold text-zinc-800">Lật hình Bubu &amp; Dudu 🐻🧸</h1>
+      <h1 className="text-center text-3xl font-bold text-zinc-800">Lật hình emoji 🐻</h1>
 
       {/* Scoreboard — the current turn's name is highlighted */}
       <div className="flex items-center justify-center gap-4 text-lg">
@@ -162,7 +162,12 @@ export default function GamePage() {
       )}
 
       {/* Board */}
-      <div className={`grid grid-cols-4 gap-2 sm:gap-3 ${!finished && !myTurn ? "opacity-60" : ""}`}>
+      {/* Square board sized from the saved game (a 4×4 game started before
+          the 6×6 switch still renders correctly until "Ván mới"). */}
+      <div
+        className={`grid gap-1.5 sm:gap-2 ${!finished && !myTurn ? "opacity-60" : ""}`}
+        style={{ gridTemplateColumns: `repeat(${Math.round(Math.sqrt(game.cardOrder.length))}, minmax(0, 1fr))` }}
+      >
         {game.cardOrder.map((face, i) => {
           const isMatched = game.matched.includes(i);
           const isUp = isMatched || game.flipped.includes(i);
@@ -174,7 +179,7 @@ export default function GamePage() {
               // an abandoned mismatch.
               onClick={() => (isMatched ? undefined : tap(i))}
               aria-label={isUp ? CARD_FACES[face] : "Lá úp"}
-              className={`flex aspect-square items-center justify-center rounded-2xl text-3xl shadow-sm transition-all active:scale-95 sm:text-4xl ${
+              className={`flex aspect-square items-center justify-center rounded-xl text-2xl shadow-sm transition-all active:scale-95 sm:text-3xl ${
                 isMatched
                   ? "border border-pink-100 bg-pink-50 opacity-60 ring-2 ring-pink-200"
                   : isMismatch

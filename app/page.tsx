@@ -50,7 +50,7 @@ export default function Home() {
           href="/game"
           className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 transition-all hover:bg-pink-50 active:scale-95"
         >
-          Lật hình Bubu &amp; Dudu 🐻🧸
+          Lật hình emoji 🐻
         </Link>
         <Link
           href="/drink-prefs"
