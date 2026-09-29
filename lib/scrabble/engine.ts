@@ -4,6 +4,7 @@ import {
   BLANK,
   BOARD_SIZE,
   CENTER,
+  END_OFFER_BELOW,
   MAX_SCORELESS_TURNS,
   MIN_BAG_TO_EXCHANGE,
   PREMIUMS,
@@ -42,7 +43,10 @@ export type ScrabbleState = {
   startedBy: Player; // who went first; the next game alternates
   scorelessTurns: number; // consecutive, across both players
   history: Move[];
-  endReason?: "out" | "six-scoreless";
+  // "Kết thúc ván" asked by one player, waiting for the other to agree.
+  // Any move clears it (someone found a play, so the game goes on).
+  endProposal?: { by: Player; at: number };
+  endReason?: "out" | "six-scoreless" | "agreed";
   updatedAt: number;
 };
 
@@ -261,7 +265,7 @@ function checkTurn(state: ScrabbleState, me: Player): string | null {
 // the turn. `out` = the player who just used their last tile.
 function endTurn(state: ScrabbleState, move: Move, out: Player | null): ScrabbleState {
   const s: ScrabbleState = {
-    ...state,
+    ...withoutProposal(state),
     scorelessTurns: move.total > 0 ? 0 : state.scorelessTurns + 1,
     history: [...state.history, move],
     updatedAt: move.at,
@@ -356,6 +360,53 @@ export function applyPass(state: ScrabbleState, me: Player, now = Date.now()): S
   const refused = checkTurn(state, me);
   if (refused) return { ok: false, reason: refused };
   return { ok: true, state: endTurn(state, { by: me, type: "pass", total: 0, at: now }, null) };
+}
+
+// ─── Ending by agreement (the home rules' "no more plays possible") ─────────
+
+// The key is left out entirely, not set to undefined: Firestore rejects
+// undefined, and tx.set() replaces the whole doc, so the field disappears.
+function withoutProposal(state: ScrabbleState): ScrabbleState {
+  const s = { ...state };
+  delete s.endProposal;
+  return s;
+}
+
+// "Kết thúc ván" is offered near the end: once either rack is below
+// END_OFFER_BELOW tiles (racks only shrink after the bag runs out).
+export const canOfferEnd = (state: ScrabbleState) =>
+  state.status === "playing" &&
+  (state.racks.nam.length < END_OFFER_BELOW || state.racks.linh.length < END_OFFER_BELOW);
+
+// Ask to end the game. Either player, on either turn. If the other player
+// already asked, asking back counts as agreeing.
+export function proposeEnd(state: ScrabbleState, me: Player, now = Date.now()): StateResult {
+  if (state.status === "finished") return { ok: false, reason: "Ván này xong rồi, chơi ván mới nhé 🎉" };
+  if (!canOfferEnd(state)) return { ok: false, reason: "Còn nhiều chữ lắm, chơi tiếp đã nhé 😝" };
+  if (state.endProposal?.by === me) return { ok: false, reason: "Đang chờ người kia đồng ý nè ⏳" };
+  if (state.endProposal) return answerEnd(state, me, true, now);
+  return { ok: true, state: { ...state, endProposal: { by: me, at: now }, updatedAt: now } };
+}
+
+// The other player agrees (game over, each loses their own rack value, as in
+// the official home rules) or says no (play on). The asker can also take the
+// request back with agree = false.
+export function answerEnd(state: ScrabbleState, me: Player, agree: boolean, now = Date.now()): StateResult {
+  if (state.status === "finished") return { ok: false, reason: "Ván này xong rồi, chơi ván mới nhé 🎉" };
+  if (!state.endProposal) return { ok: false, reason: "Không có ai xin kết thúc ván cả 🤔" };
+  if (!agree) return { ok: true, state: { ...withoutProposal(state), updatedAt: now } };
+  if (state.endProposal.by === me) return { ok: false, reason: "Người kia phải đồng ý mới được nha 😝" };
+  const s = withoutProposal(state);
+  return {
+    ok: true,
+    state: {
+      ...s,
+      scores: { nam: s.scores.nam - rackValue(s.racks.nam), linh: s.scores.linh - rackValue(s.racks.linh) },
+      status: "finished",
+      endReason: "agreed",
+      updatedAt: now,
+    },
+  };
 }
 
 export function winner(state: ScrabbleState): Player | "tie" {

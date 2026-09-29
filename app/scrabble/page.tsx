@@ -7,12 +7,15 @@ import { useMe } from "@/lib/useMe";
 import { BOARD_SIZE, CENTER, MIN_BAG_TO_EXCHANGE } from "@/lib/scrabble/constants";
 import { isWordIn, loadDictionary } from "@/lib/scrabble/dictionary";
 import {
+  answerEnd,
   applyExchange,
   applyPass,
   applyPlay,
+  canOfferEnd,
   evaluatePlay,
   newGame,
   other,
+  proposeEnd,
   winner,
   type Placement,
   type Player,
@@ -106,10 +109,17 @@ export default function ScrabblePage() {
       </main>
     );
   }
-  // A new key after every saved move remounts the game view, which clears
-  // the half-built move, selection, zoom and rack order for the next turn.
+  // A new key after every move (and new game / game over) remounts the game
+  // view, which clears the half-built move, selection, zoom and rack order.
+  // Not keyed on updatedAt: a "Kết thúc ván" request must not wipe the other
+  // player's half-built move.
   return (
-    <ScrabbleGame key={`${game.updatedAt}:${game.history.length}`} game={game} me={me} words={words} />
+    <ScrabbleGame
+      key={`${game.startedBy}:${game.history.length}:${game.status}`}
+      game={game}
+      me={me}
+      words={words}
+    />
   );
 }
 
@@ -242,6 +252,14 @@ function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; wo
     if (window.confirm("Bỏ lượt này hả? 🥺")) run((state) => applyPass(state, me));
   };
 
+  const askToEnd = () => {
+    if (window.confirm(`Kết thúc ván này? ${NAME[other(me)]} cần đồng ý nữa nhé 🏁`)) {
+      run((state) => proposeEnd(state, me));
+    }
+  };
+
+  const answerToEnd = (agree: boolean) => run((state) => answerEnd(state, me, agree));
+
   const startNewGame = async () => {
     if (!finished && game.history.length > 0 && !window.confirm("Bỏ ván này hả? 🥺")) return;
     try {
@@ -274,12 +292,60 @@ function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; wo
       {finished ? (
         <div className="rounded-2xl bg-gradient-to-r from-pink-500 to-rose-400 px-4 py-4 text-center text-lg font-semibold text-white shadow-lg shadow-pink-200">
           {result === "tie" ? "Hoà nhau, cả hai đều giỏi 💞" : `${NAME[result as Player]} thắng rồi! 🏆`}
+          <p className="mt-1 text-sm font-normal opacity-90">
+            {game.endReason === "agreed"
+              ? "Hai đứa đồng ý kết thúc ván 🤝"
+              : game.endReason === "out"
+                ? `${NAME[game.turn]} hết chữ trước 🎉`
+                : "6 lượt liền không ai ghi điểm"}
+            {" · "}mỗi người trừ điểm chữ còn trên giá
+          </p>
         </div>
       ) : (
         <p className="text-center text-sm text-gray-500">
           {myTurn ? `Lượt của ${NAME[me]} nè 💕` : `Đợi ${NAME[game.turn]} nhé ⏳`} · Túi còn{" "}
           {game.bag.length} chữ
         </p>
+      )}
+
+      {/* A pending "Kết thúc ván" request — shown up here so it's noticed */}
+      {!finished && game.endProposal && (
+        <div className="rounded-2xl border-2 border-pink-200 bg-pink-50 px-4 py-3 text-center text-sm text-zinc-700">
+          {game.endProposal.by === me ? (
+            <>
+              <p>🏁 Đang chờ {NAME[other(me)]} đồng ý kết thúc ván...</p>
+              <button
+                onClick={() => answerToEnd(false)}
+                disabled={busy}
+                className="mt-2 text-pink-500 underline disabled:opacity-40"
+              >
+                Huỷ, chơi tiếp
+              </button>
+            </>
+          ) : (
+            <>
+              <p>
+                🏁 {NAME[game.endProposal.by]} muốn kết thúc ván. Mỗi người trừ điểm chữ còn trên giá.
+              </p>
+              <div className="mt-2 flex justify-center gap-2">
+                <button
+                  onClick={() => answerToEnd(true)}
+                  disabled={busy}
+                  className="rounded-full bg-pink-500 px-4 py-1.5 font-semibold text-white active:scale-95 disabled:opacity-40"
+                >
+                  Đồng ý 🤝
+                </button>
+                <button
+                  onClick={() => answerToEnd(false)}
+                  disabled={busy}
+                  className="rounded-full border-2 border-pink-300 bg-white px-4 py-1.5 font-semibold text-pink-500 active:scale-95 disabled:opacity-40"
+                >
+                  Chơi tiếp 💪
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       )}
 
       <div className="flex flex-col gap-2">
@@ -414,6 +480,17 @@ function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; wo
               </li>
             ))}
         </ul>
+      )}
+
+      {/* Near the end (a rack under 5 tiles), either player can ask to stop */}
+      {canOfferEnd(game) && !game.endProposal && (
+        <button
+          onClick={askToEnd}
+          disabled={busy}
+          className="mx-auto text-sm text-gray-400 underline active:scale-95 disabled:opacity-40"
+        >
+          🏁 Kết thúc ván
+        </button>
       )}
 
       <button

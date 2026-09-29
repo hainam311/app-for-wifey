@@ -7,6 +7,7 @@ export const RACK_SIZE = 7;
 export const BINGO_BONUS = 50; // all 7 tiles in one turn
 export const MIN_BAG_TO_EXCHANGE = 7;
 export const MAX_SCORELESS_TURNS = 6; // across both players → game over
+export const END_OFFER_BELOW = 5; // "Kết thúc ván" appears once a rack has fewer tiles than this
 export const BLANK = "?"; // a blank tile on a rack
 
 // 100 tiles: letter → [count, points]. Blanks are worth 0.
