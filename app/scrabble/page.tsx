@@ -1,11 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { doc, onSnapshot, runTransaction, setDoc } from "firebase/firestore";
+import { onSnapshot, runTransaction, setDoc } from "firebase/firestore";
 import { authReady, db } from "@/lib/firebase";
 import { useMe } from "@/lib/useMe";
 import { BOARD_SIZE, CENTER, MIN_BAG_TO_EXCHANGE } from "@/lib/scrabble/constants";
 import { isWordIn, loadDictionary } from "@/lib/scrabble/dictionary";
+import { gameRef } from "@/lib/scrabble/gameDoc";
 import {
   answerEnd,
   applyExchange,
@@ -28,7 +29,6 @@ import Rack from "./Rack";
 // One async game shared by both phones in scrabble_game/shared. Every move is
 // a transaction that re-reads the doc and runs the engine against that, so
 // the rules always check the latest board — never a stale copy on screen.
-const gameRef = doc(db, "scrabble_game", "shared");
 const FIRST_EVER_STARTER: Player = "linh"; // ladies first 💕
 
 // A rule refusal (not your turn, word not in the dictionary…) — shown as a toast.
@@ -357,7 +357,13 @@ function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; wo
           onCell={tapCell}
           scrollRef={boardBox}
         />
-        <div className="flex justify-end">
+        <div className="flex justify-between">
+          <Link
+            href="/scrabble/tu-dien"
+            className="rounded-full border border-pink-200 bg-white px-3 py-1 text-sm text-pink-500 active:scale-95"
+          >
+            📖 Từ điển
+          </Link>
           <button
             onClick={() => {
               autoZoomed.current = true; // the player chose; stop auto-zooming this turn

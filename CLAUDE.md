@@ -14,6 +14,7 @@ npm run lint     # eslint (flat config, next core-web-vitals + typescript)
 python3 scripts/export_excel.py    # Excel workbook → scripts/data/{foods,trips,wishlist,journal}.json
 node scripts/seed.mjs              # append JSON in scripts/data/ into Firestore (never deletes)
 node scripts/seed.mjs --clear=foods,trips   # wipe ONLY the named collections first, then seed
+python3 scripts/build_vi_dict.py <vi-extract.jsonl.gz>  # rebuild public/words/vi/*.json (Scrabble Từ điển meanings; download URL in the script)
 ```
 
 There is no test framework or test script. Deploys happen via `git push` (Vercel auto-builds from GitHub).
@@ -28,7 +29,7 @@ A small private 2-person Next.js 16 (App Router, React 19, Tailwind v4) app. **T
 
 **Page pattern** (every data page under `app/*/page.tsx` follows it; `app/drink-prefs/page.tsx` is the fullest example with add/edit): `"use client"`, then in `useEffect` await `authReady` (guarding with a `cancelled` flag), then subscribe via `onSnapshot(query(collection(db, "<name>"), ...))` and return the unsubscribe. Writes go straight to Firestore (`addDoc`/`updateDoc`/`increment`), not local state — realtime sync between the two phones depends on this. Skipping `authReady` causes `permission-denied` on a device's first visit.
 
-**Firestore collections:** `foods`, `todos`, `wishlist`, `trips`, `journal`, `shop_prefs` (drink-prefs page), `memory_game` (single doc `shared` for the `/game` memory match; rules are pure functions in `lib/memoryGame.ts` and every move is a `runTransaction` so two phones can't race), `scrabble_game` (single doc `shared` for `/scrabble`, same pattern: pure rules in `lib/scrabble/engine.ts`, word list `public/words/cel.txt`), plus server-only `unlock_attempts` (lockout counters; never read or written from pages). New collections need no rule changes. `lib/foodData.ts` holds the `Food` type + `CATEGORIES`; `lib/drinkPrefs.ts` is a legacy static backup that no page reads.
+**Firestore collections:** `foods`, `todos`, `wishlist`, `trips`, `journal`, `shop_prefs` (drink-prefs page), `memory_game` (single doc `shared` for the `/game` memory match; rules are pure functions in `lib/memoryGame.ts` and every move is a `runTransaction` so two phones can't race), `scrabble_game` (single doc `shared` for `/scrabble`, same pattern: pure rules in `lib/scrabble/engine.ts`, word list `public/words/cel.txt`; `/scrabble/tu-dien` reads it to show Vietnamese meanings from `public/words/vi/`, CC BY-SA), plus server-only `unlock_attempts` (lockout counters; never read or written from pages). New collections need no rule changes. `lib/foodData.ts` holds the `Food` type + `CATEGORIES`; `lib/drinkPrefs.ts` is a legacy static backup that no page reads.
 
 **Env:** `.env.local` (gitignored) holds the six `NEXT_PUBLIC_FIREBASE_*` keys plus the server-only `NAM_PASSCODE`, `LINH_PASSCODE` and `SESSION_SECRET` (rotating the secret logs every phone out); `seed.mjs` parses it directly. Production values live in Vercel env settings.
 
