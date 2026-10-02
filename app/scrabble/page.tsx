@@ -40,8 +40,30 @@ const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
 type Pending = Placement & { slot: number }; // `slot` = where it came from on the rack
 
+// The 🔍 choice is a per-phone preference: remembered across turns and visits.
+const ZOOM_KEY = "scrabble-zoom";
+function readZoom(): boolean {
+  try {
+    return typeof window !== "undefined" && window.localStorage.getItem(ZOOM_KEY) === "1";
+  } catch {
+    return false; // storage blocked (private mode…): just start zoomed out
+  }
+}
+function saveZoom(zoom: boolean) {
+  try {
+    window.localStorage.setItem(ZOOM_KEY, zoom ? "1" : "0");
+  } catch {
+    // not saved; the choice still lasts for this visit
+  }
+}
+
 export default function ScrabblePage() {
   const me = useMe();
+  const [zoom, setZoomState] = useState(readZoom);
+  const setZoom = (next: boolean) => {
+    setZoomState(next);
+    saveZoom(next);
+  };
   const [game, setGame] = useState<ScrabbleState | null>(null);
   const [words, setWords] = useState<Set<string> | null>(null);
   const [dictError, setDictError] = useState(false);
@@ -110,32 +132,44 @@ export default function ScrabblePage() {
     );
   }
   // A new key after every move (and new game / game over) remounts the game
-  // view, which clears the half-built move, selection, zoom and rack order.
-  // Not keyed on updatedAt: a "Kết thúc ván" request must not wipe the other
-  // player's half-built move.
+  // view, which clears the half-built move, selection and rack order. Zoom
+  // lives up here, so it survives that. Not keyed on updatedAt: a "Kết thúc
+  // ván" request must not wipe the other player's half-built move.
   return (
     <ScrabbleGame
       key={`${game.startedBy}:${game.history.length}:${game.status}`}
       game={game}
       me={me}
       words={words}
+      zoom={zoom}
+      setZoom={setZoom}
     />
   );
 }
 
-function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; words: Set<string> }) {
+function ScrabbleGame({
+  game,
+  me,
+  words,
+  zoom,
+  setZoom,
+}: {
+  game: ScrabbleState;
+  me: Player;
+  words: Set<string>;
+  zoom: boolean;
+  setZoom: (zoom: boolean) => void;
+}) {
   const [pending, setPending] = useState<Pending[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [blankAt, setBlankAt] = useState<{ slot: number; index: number } | null>(null);
   const [exchanging, setExchanging] = useState(false);
   const [marked, setMarked] = useState<Set<number>>(new Set());
-  const [zoom, setZoom] = useState(false);
   const [shuffled, setShuffled] = useState<{ key: string; order: number[] } | null>(null);
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const boardBox = useRef<HTMLDivElement>(null);
-  const autoZoomed = useRef(false); // auto-zoom once per turn; after that the 🔍 button decides
 
   const rack = game.racks[me]; // only ever your own rack
   const rackKey = `${game.history.length}:${me}`;
@@ -150,7 +184,8 @@ function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; wo
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  // When zooming in, scroll to where the action is.
+  // When zoomed in (by 🔍, or already zoomed when a new turn starts), scroll
+  // to where the action is.
   useEffect(() => {
     const box = boardBox.current;
     if (!zoom || !box) return;
@@ -206,12 +241,7 @@ function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; wo
       setMarked(next);
       return;
     }
-    const picking = selected !== slot;
-    setSelected(picking ? slot : null);
-    if (picking && !zoom && !autoZoomed.current) {
-      autoZoomed.current = true;
-      setZoom(true);
-    }
+    setSelected(selected === slot ? null : slot); // no auto-zoom: only 🔍 changes the zoom
   };
 
   const tapCell = (index: number) => {
@@ -365,10 +395,7 @@ function ScrabbleGame({ game, me, words }: { game: ScrabbleState; me: Player; wo
             📖 Từ điển
           </Link>
           <button
-            onClick={() => {
-              autoZoomed.current = true; // the player chose; stop auto-zooming this turn
-              setZoom(!zoom);
-            }}
+            onClick={() => setZoom(!zoom)}
             className="rounded-full border border-pink-200 bg-white px-3 py-1 text-sm text-pink-500 active:scale-95"
           >
             {zoom ? "🔍 Thu nhỏ" : "🔍 Phóng to"}
