@@ -16,6 +16,7 @@ export default function Board({
   ghost,
   last,
   winLine,
+  playable,
   onCell,
 }: {
   board: Cell[];
@@ -23,6 +24,7 @@ export default function Board({
   ghost: Piece; // what the selected cell would become
   last: number | null;
   winLine?: number[];
+  playable: boolean; // false when the game is over: no hover, no pointer
   onCell: (index: number) => void;
 }) {
   const from = winLine && center(winLine[0]);
@@ -57,10 +59,10 @@ export default function Board({
                   ? "bg-amber-50 ring-2 ring-amber-400 ring-inset"
                   : i === last
                     ? "bg-amber-100"
-                    : cell
+                    : cell || !playable
                       ? "bg-white"
                       : "bg-white hover:bg-amber-50"
-              } ${cell ? "cursor-default" : ""}`}
+              } ${cell || !playable ? "cursor-default" : ""}`}
             >
               {shown ? <span className={isSelected ? "opacity-40" : ""}>{shown.toUpperCase()}</span> : null}
             </button>

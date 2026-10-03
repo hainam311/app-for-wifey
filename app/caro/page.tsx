@@ -9,9 +9,13 @@ import { gameRef } from "@/lib/caro/gameDoc";
 import Board from "./Board";
 import {
   PIECE,
+  answerDraw,
   newGame,
   nextGame,
+  other,
   place,
+  proposeDraw,
+  resign,
   type CaroState,
   type Player,
   type StateResult,
@@ -27,12 +31,20 @@ class GameRuleError extends Error {}
 
 const NAME: Record<Player, string> = { nam: "🐻 Nam", linh: "🧸 Linh" };
 
-const END_TEXT = {
-  five: "5 quân liền nhau 🎯",
-  full: "Bàn cờ đã kín ô",
-  agreed: "Hai bạn đồng ý hòa 🤝",
-  resign: "Có người đầu hàng 🏳️",
-} as const;
+function endText(game: CaroState): string {
+  switch (game.endReason) {
+    case "five":
+      return "5 quân liền nhau 🎯";
+    case "full":
+      return "Bàn cờ đã kín ô";
+    case "agreed":
+      return "Hai bạn đồng ý hòa 🤝";
+    case "resign":
+      return game.winner ? `${NAME[other(game.winner)]} đầu hàng 🏳️` : "";
+    default:
+      return "";
+  }
+}
 
 const Title = () => <h1 className="text-center text-3xl font-bold text-zinc-800">Cờ caro 🐻🧸</h1>;
 
@@ -84,7 +96,7 @@ export default function CaroPage() {
 
   // A new key after every move (and new game / game over) remounts the game
   // view, which clears the selection. Not keyed on updatedAt, so a draw offer
-  // (step 4) won't wipe the other player's selection.
+  // won't wipe the other player's selection.
   return <CaroGame key={`${game.startedBy}:${game.moves.length}:${game.status}`} game={game} me={me} />;
 }
 
@@ -148,7 +160,15 @@ function CaroGame({ game, me }: { game: CaroState; me: Player }) {
         : { ok: false, reason: "Ván mới bắt đầu rồi nè 🎉" }
     );
 
+  const askDraw = () => run((s) => proposeDraw(s, me));
+  const answer = (agree: boolean) => run((s) => answerDraw(s, me, agree));
+  const giveUp = () => {
+    if (!window.confirm("Đầu hàng ván này hả? 🏳️")) return;
+    run((s) => resign(s, me));
+  };
+
   const last = game.moves.length ? game.moves[game.moves.length - 1] : null;
+  const offer = playing ? game.drawProposal : undefined;
   const nextStarter: Player = game.startedBy === "nam" ? "linh" : "nam";
 
   return (
@@ -163,7 +183,7 @@ function CaroGame({ game, me }: { game: CaroState; me: Player }) {
         {playing ? (
           <>
             {myTurn ? (
-              <b className="text-rose-500">Lượt của em!</b>
+              <b className="inline-block animate-pulse text-rose-500">Lượt của em!</b>
             ) : (
               <>
                 Đợi <b>{NAME[game.turn]}</b> đánh…
@@ -179,11 +199,46 @@ function CaroGame({ game, me }: { game: CaroState; me: Player }) {
             )}
           </>
         ) : game.winner ? (
-          <b>{NAME[game.winner]} thắng! 🎉</b>
+          <b className="inline-block animate-bounce text-lg text-rose-500">
+            {game.winner === me ? "Em thắng rồi! 🎉🎊" : `${NAME[game.winner]} thắng! 🎉`}
+          </b>
         ) : (
-          <b>Hòa 🤝</b>
+          <b className="text-lg">Hòa 🤝</b>
         )}
       </p>
+
+      {offer && (
+        <div className="mx-auto flex flex-wrap items-center justify-center gap-2 rounded-2xl bg-amber-50 px-4 py-2 text-sm">
+          {offer.by === me ? (
+            <>
+              <span>Đang chờ {NAME[other(me)]} đồng ý hòa ⏳</span>
+              <button onClick={() => answer(false)} disabled={busy} className="text-zinc-500 underline">
+                Rút lại
+              </button>
+            </>
+          ) : (
+            <>
+              <span>
+                <b>{NAME[offer.by]}</b> xin hòa 🤝
+              </span>
+              <button
+                onClick={() => answer(true)}
+                disabled={busy}
+                className="rounded-full bg-rose-500 px-3 py-1 font-semibold text-white"
+              >
+                Đồng ý
+              </button>
+              <button
+                onClick={() => answer(false)}
+                disabled={busy}
+                className="rounded-full border border-zinc-300 bg-white px-3 py-1 text-zinc-600"
+              >
+                Đánh tiếp
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       <Board
         board={game.board}
@@ -191,6 +246,7 @@ function CaroGame({ game, me }: { game: CaroState; me: Player }) {
         ghost={PIECE[me]}
         last={last}
         winLine={game.winLine}
+        playable={myTurn}
         onCell={tapCell}
       />
 
@@ -204,9 +260,22 @@ function CaroGame({ game, me }: { game: CaroState; me: Player }) {
             "Bấm một ô để chọn"
           )
         ) : (
-          !playing && game.endReason && END_TEXT[game.endReason]
+          !playing && endText(game)
         )}
       </p>
+
+      {playing && game.moves.length > 0 && (
+        <div className="flex justify-center gap-4 text-sm">
+          {!offer && (
+            <button onClick={askDraw} disabled={busy} className="text-zinc-500 underline hover:text-zinc-700">
+              🤝 Xin hòa
+            </button>
+          )}
+          <button onClick={giveUp} disabled={busy} className="text-zinc-500 underline hover:text-zinc-700">
+            🏳️ Đầu hàng
+          </button>
+        </div>
+      )}
 
       {!playing && (
         <button
