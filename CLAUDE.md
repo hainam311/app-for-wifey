@@ -17,7 +17,7 @@ node scripts/seed.mjs --clear=foods,trips   # wipe ONLY the named collections fi
 python3 scripts/build_vi_dict.py <vi-extract.jsonl.gz>  # rebuild public/words/vi/*.json (Scrabble Từ điển meanings; download URL in the script)
 ```
 
-There is no test framework or test script. Deploys happen via `git push` (Vercel auto-builds from GitHub).
+There is no test framework or test script; `node_modules/.bin/jiti scripts/caro-check.ts` runs the Cờ caro rules checks. Deploys happen via `git push` (Vercel auto-builds from GitHub).
 
 ## Architecture
 
