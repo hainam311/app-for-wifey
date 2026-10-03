@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { onSnapshot, runTransaction } from "firebase/firestore";
+import { authReady, db } from "@/lib/firebase";
+import { useMe } from "@/lib/useMe";
+import { gameRef } from "@/lib/caro/gameDoc";
 import Board from "./Board";
 import {
   PIECE,
@@ -12,6 +17,14 @@ import {
   type StateResult,
 } from "@/lib/caro/engine";
 
+// One game shared by both screens in caro_game/shared. Every move is a
+// transaction that re-reads the doc and runs the engine against that, so the
+// rules always check the latest board — never a stale copy on screen.
+const FIRST_EVER_STARTER: Player = "linh"; // ladies first 💕
+
+// A rule refusal (not your turn, cell taken…) — shown as a toast.
+class GameRuleError extends Error {}
+
 const NAME: Record<Player, string> = { nam: "🐻 Nam", linh: "🧸 Linh" };
 
 const END_TEXT = {
@@ -21,36 +34,64 @@ const END_TEXT = {
   resign: "Có người đầu hàng 🏳️",
 } as const;
 
-// Step 2: local only — one screen, both players take turns on it.
-// Step 3 moves the game into Firestore (caro_game/shared).
+const Title = () => <h1 className="text-center text-3xl font-bold text-zinc-800">Cờ caro 🐻🧸</h1>;
+
 export default function CaroPage() {
-  const [game, setGame] = useState<CaroState>(() => newGame("linh"));
-  return (
-    <CaroGame
-      key={`${game.startedBy}:${game.moves.length}:${game.status}`}
-      game={game}
-      run={(move) => {
-        const res = move(game);
-        if (res.ok) setGame(res.state);
-        return res;
-      }}
-      startNewGame={() => setGame(nextGame(game))}
-    />
-  );
+  const me = useMe();
+  const [game, setGame] = useState<CaroState | null>(null);
+
+  // Load the shared game (realtime!) and create it the first time.
+  useEffect(() => {
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      unsub = onSnapshot(gameRef, (snap) => {
+        if (snap.exists()) {
+          setGame(snap.data() as CaroState);
+        } else {
+          runTransaction(db, async (tx) => {
+            if (!(await tx.get(gameRef)).exists()) tx.set(gameRef, newGame(FIRST_EVER_STARTER));
+          }).catch((err) => console.error("Could not create game:", err));
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, []);
+
+  if (me === null) {
+    return (
+      <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10 text-center">
+        <Title />
+        <Link href="/lock?next=/caro" className="py-12 text-rose-500 underline">
+          Chưa biết máy của ai 🤔 Mở khoá lại nhé
+        </Link>
+      </main>
+    );
+  }
+
+  if (!game || me === undefined) {
+    return (
+      <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10">
+        <Title />
+        <p className="py-12 text-center text-gray-400">Đang tải...</p>
+      </main>
+    );
+  }
+
+  // A new key after every move (and new game / game over) remounts the game
+  // view, which clears the selection. Not keyed on updatedAt, so a draw offer
+  // (step 4) won't wipe the other player's selection.
+  return <CaroGame key={`${game.startedBy}:${game.moves.length}:${game.status}`} game={game} me={me} />;
 }
 
-function CaroGame({
-  game,
-  run,
-  startNewGame,
-}: {
-  game: CaroState;
-  run: (move: (s: CaroState) => StateResult) => StateResult;
-  startNewGame: () => void;
-}) {
-  const me = game.turn; // local: whoever's turn it is plays
+function CaroGame({ game, me }: { game: CaroState; me: Player }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [toast, setToast] = useState("");
+  const [busy, setBusy] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
@@ -61,22 +102,58 @@ function CaroGame({
   };
 
   const playing = game.status === "playing";
+  const myTurn = playing && game.turn === me;
+
+  // Runs one action as a transaction against the latest saved game. On
+  // success the snapshot brings the new state back and the view resets
+  // itself (see the key above).
+  const run = async (move: (state: CaroState) => StateResult) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(gameRef);
+        if (!snap.exists()) throw new GameRuleError("Ván này không còn nữa, tải lại trang nhé 🔄");
+        const result = move(snap.data() as CaroState);
+        if (!result.ok) throw new GameRuleError(result.reason);
+        tx.set(gameRef, result.state);
+      });
+    } catch (err) {
+      if (err instanceof GameRuleError) say(err.message);
+      else {
+        console.error("Move failed:", err);
+        say("Có lỗi gì đó, thử lại nhé 🥺");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const tapCell = (i: number) => {
     if (!playing || game.board[i] !== "") return;
+    if (!myTurn) return say(`Đợi ${NAME[game.turn]} đánh xong đã nhé ⏳`);
     if (selected !== i) {
       setSelected(i); // click 1: select (or move the selection)
       return;
     }
-    const res = run((s) => place(s, me, i)); // click 2: place
-    if (!res.ok) say(res.reason);
+    run((s) => place(s, me, i)); // click 2: place
   };
 
+  // Both may press "Ván mới" at once: only the first one counts, and it can
+  // never wipe a game that has already started.
+  const startNewGame = () =>
+    run((s) =>
+      s.status === "over" && s.startedBy === game.startedBy
+        ? { ok: true, state: nextGame(s) }
+        : { ok: false, reason: "Ván mới bắt đầu rồi nè 🎉" }
+    );
+
   const last = game.moves.length ? game.moves[game.moves.length - 1] : null;
+  const nextStarter: Player = game.startedBy === "nam" ? "linh" : "nam";
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col gap-3 px-4 py-8">
-      <h1 className="text-center text-3xl font-bold text-zinc-800">Cờ caro 🐻🧸</h1>
+      <Title />
 
       <p className="text-center text-sm text-zinc-500">
         {NAME.nam}: <b className="text-rose-500">X</b> · {NAME.linh}: <b className="text-sky-500">O</b>
@@ -85,7 +162,14 @@ function CaroGame({
       <p className="min-h-6 text-center" role="status">
         {playing ? (
           <>
-            Lượt của <b>{NAME[game.turn]}</b> (
+            {myTurn ? (
+              <b className="text-rose-500">Lượt của em!</b>
+            ) : (
+              <>
+                Đợi <b>{NAME[game.turn]}</b> đánh…
+              </>
+            )}{" "}
+            (
             <b className={PIECE[game.turn] === "x" ? "text-rose-500" : "text-sky-500"}>
               {PIECE[game.turn].toUpperCase()}
             </b>
@@ -113,23 +197,24 @@ function CaroGame({
       <p className="min-h-5 text-center text-sm text-zinc-500">
         {toast ? (
           <span className="text-pink-500">{toast}</span>
-        ) : playing ? (
+        ) : myTurn ? (
           selected !== null ? (
             "Bấm lần nữa vào ô đó để đặt quân ✅"
           ) : (
             "Bấm một ô để chọn"
           )
         ) : (
-          game.endReason && END_TEXT[game.endReason]
+          !playing && game.endReason && END_TEXT[game.endReason]
         )}
       </p>
 
       {!playing && (
         <button
           onClick={startNewGame}
-          className="mx-auto rounded-full bg-rose-500 px-6 py-2 font-semibold text-white shadow hover:bg-rose-600"
+          disabled={busy}
+          className="mx-auto rounded-full bg-rose-500 px-6 py-2 font-semibold text-white shadow hover:bg-rose-600 disabled:opacity-60"
         >
-          Ván mới · {NAME[game.startedBy === "nam" ? "linh" : "nam"]} đi trước
+          Ván mới · {NAME[nextStarter]} đi trước
         </button>
       )}
     </main>
