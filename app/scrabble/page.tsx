@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { onSnapshot, runTransaction, setDoc } from "firebase/firestore";
+import { onSnapshot, runTransaction } from "firebase/firestore";
 import { authReady, db } from "@/lib/firebase";
 import { useMe } from "@/lib/useMe";
 import { BOARD_SIZE, CENTER, MIN_BAG_TO_EXCHANGE } from "@/lib/scrabble/constants";
@@ -18,18 +18,29 @@ import {
   other,
   proposeEnd,
   winner,
+  placeTiles,
   type Placement,
   type Player,
   type ScrabbleState,
   type StateResult,
 } from "@/lib/scrabble/engine";
 import Board from "./Board";
+import DebugBadge, { debugOn, fmt, logDebug, noteArrival, watchPage } from "./DebugBadge";
 import Rack from "./Rack";
 
 // One async game shared by both phones in scrabble_game/shared. Every move is
 // a transaction that re-reads the doc and runs the engine against that, so
 // the rules always check the latest board — never a stale copy on screen.
 const FIRST_EVER_STARTER: Player = "linh"; // ladies first 💕
+
+// Debug log label for the change that produced this state.
+function describeChange(state: ScrabbleState): string {
+  const last = state.history.at(-1);
+  if (state.endProposal) return `${ICON[state.endProposal.by]} ${NAME[state.endProposal.by]} xin kết thúc`;
+  if (!last) return "ván mới";
+  const what = { play: "đánh", exchange: "đổi chữ", pass: "bỏ lượt" }[last.type];
+  return `${ICON[last.by]} ${NAME[last.by]} ${what}`;
+}
 
 // A rule refusal (not your turn, word not in the dictionary…) — shown as a toast.
 class GameRuleError extends Error {}
@@ -67,6 +78,7 @@ export default function ScrabblePage() {
   const [game, setGame] = useState<ScrabbleState | null>(null);
   const [words, setWords] = useState<Set<string> | null>(null);
   const [dictError, setDictError] = useState(false);
+  const [debug] = useState(debugOn); // ?debug=1: corner log of update timings
 
   const fetchWords = () =>
     loadDictionary()
@@ -86,7 +98,13 @@ export default function ScrabblePage() {
       if (cancelled) return;
       unsub = onSnapshot(gameRef, (snap) => {
         if (snap.exists()) {
-          setGame(snap.data() as ScrabbleState);
+          const next = snap.data() as ScrabbleState;
+          noteArrival(
+            { updatedAt: next.updatedAt, startedBy: next.startedBy, moves: next.history.length },
+            describeChange(next),
+            snap.metadata.fromCache
+          );
+          setGame(next);
         } else {
           runTransaction(db, async (tx) => {
             if (!(await tx.get(gameRef)).exists()) tx.set(gameRef, newGame(FIRST_EVER_STARTER));
@@ -100,6 +118,9 @@ export default function ScrabblePage() {
     };
   }, []);
 
+  // Debug only: log the page sleeping / waking and the network dropping.
+  useEffect(() => watchPage(), []);
+
   if (me === null) {
     return (
       <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10 text-center">
@@ -111,23 +132,13 @@ export default function ScrabblePage() {
     );
   }
 
-  if (!game || !words || me === undefined) {
+  // The board shows as soon as the game arrives; the word list (183 KB) keeps
+  // loading behind it and only "Đánh" and the live preview wait for it.
+  if (!game || me === undefined) {
     return (
       <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10">
         <h1 className="text-center text-3xl font-bold text-zinc-800">Scrabble with Love 💌</h1>
-        {dictError ? (
-          <button
-            onClick={() => {
-              setDictError(false);
-              fetchWords();
-            }}
-            className="py-12 text-center text-rose-500 underline"
-          >
-            Không tải được từ điển, thử lại 🔄
-          </button>
-        ) : (
-          <p className="py-12 text-center text-gray-400">Đang tải...</p>
-        )}
+        <p className="py-12 text-center text-gray-400">Đang tải...</p>
       </main>
     );
   }
@@ -141,8 +152,15 @@ export default function ScrabblePage() {
       game={game}
       me={me}
       words={words}
+      dictError={dictError}
+      onRetryDict={() => {
+        setDictError(false);
+        fetchWords();
+      }}
       zoom={zoom}
       setZoom={setZoom}
+      onSaved={debug ? (what, ms) => logDebug(`📤 lưu ${what} mất ${fmt(ms)}`) : undefined}
+      badge={debug ? <DebugBadge /> : null}
     />
   );
 }
@@ -151,14 +169,22 @@ function ScrabbleGame({
   game,
   me,
   words,
+  dictError,
+  onRetryDict,
   zoom,
   setZoom,
+  onSaved,
+  badge,
 }: {
   game: ScrabbleState;
   me: Player;
-  words: Set<string>;
+  words: Set<string> | null;
+  dictError: boolean;
+  onRetryDict: () => void;
   zoom: boolean;
   setZoom: (zoom: boolean) => void;
+  onSaved?: (what: string, ms: number) => void; // debug: how long our own save took
+  badge: ReactNode;
 }) {
   const [pending, setPending] = useState<Pending[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
@@ -177,8 +203,10 @@ function ScrabbleGame({
     shuffled?.key === rackKey && shuffled.order.length === rack.length
       ? shuffled.order
       : rack.map((_, i) => i);
-  const used = new Set(pending.map((p) => p.slot));
-  const lastMove = game.history.at(-1)?.cells ?? [];
+  const [locked, setLocked] = useState<Pending[] | null>(null); // played, waiting for the save
+  const used = new Set((locked ?? pending).map((p) => p.slot));
+  const lastMove = locked ? locked.map((p) => p.index) : (game.history.at(-1)?.cells ?? []);
+  const shownBoard = locked ? placeTiles(game.board, locked) : game.board;
   const finished = game.status === "finished";
   const myTurn = !finished && game.turn === me;
 
@@ -209,9 +237,10 @@ function ScrabbleGame({
   // Runs one move as a transaction against the latest saved game. On success
   // the snapshot brings the new state back and the view resets itself (see
   // the key above); on a refusal the half-built move stays so it can be fixed.
-  const run = async (move: (state: ScrabbleState) => StateResult) => {
-    if (busy) return;
+  const run = async (move: (state: ScrabbleState) => StateResult): Promise<boolean> => {
+    if (busy) return false;
     setBusy(true);
+    const t0 = Date.now();
     try {
       await runTransaction(db, async (tx) => {
         const snap = await tx.get(gameRef);
@@ -220,19 +249,22 @@ function ScrabbleGame({
         if (!result.ok) throw new GameRuleError(result.reason);
         tx.set(gameRef, result.state);
       });
+      onSaved?.("nước đi", Date.now() - t0);
+      return true;
     } catch (err) {
       if (err instanceof GameRuleError) showToast(err.message);
       else {
         console.error("Move failed:", err);
         showToast("Có lỗi gì đó, thử lại nhé 🥺");
       }
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
   const tapRack = (slot: number) => {
-    if (finished) return;
+    if (finished || busy || locked) return;
     if (!myTurn) return showToast(`Đợi ${NAME[game.turn]} đánh xong đã nhé ⏳`);
     if (exchanging) {
       const next = new Set(marked);
@@ -245,14 +277,14 @@ function ScrabbleGame({
   };
 
   const tapCell = (index: number) => {
-    if (finished || exchanging) return;
+    if (finished || exchanging || busy || locked) return;
     if (!myTurn) return showToast(`Đợi ${NAME[game.turn]} đánh xong đã nhé ⏳`);
     const mine = pending.find((p) => p.index === index);
     if (mine) {
       setPending(pending.filter((p) => p !== mine)); // tap a tile placed this turn → back to the rack
       return;
     }
-    if (game.board[index]) return;
+    if (shownBoard[index]) return;
     if (selected === null) return showToast("Chọn một chữ trên giá trước nhé 👇");
     if (rack[selected] === "?") {
       setBlankAt({ slot: selected, index });
@@ -268,9 +300,23 @@ function ScrabbleGame({
     setBlankAt(null);
   };
 
+  // Your tiles show as played the moment you press Đánh (`locked`), while the
+  // transaction runs. On success the snapshot remounts the view; on a refusal
+  // they go back to being pending so the move can be fixed.
   const play = () => {
+    if (busy || locked) return;
+    if (!words) return showToast("Từ điển chưa tải xong, đợi một chút nhé ⏳");
     const placements = pending.map(({ index, tile, as }) => (as ? { index, tile, as } : { index, tile }));
-    run((state) => applyPlay(state, me, placements, isWordIn(words)));
+    const snapshot = pending;
+    setLocked(snapshot);
+    setPending([]);
+    setSelected(null);
+    void run((state) => applyPlay(state, me, placements, isWordIn(words))).then((ok) => {
+      if (!ok) {
+        setLocked(null);
+        setPending(snapshot);
+      }
+    });
   };
 
   const exchange = () => {
@@ -292,21 +338,36 @@ function ScrabbleGame({
 
   const startNewGame = async () => {
     if (!finished && game.history.length > 0 && !window.confirm("Bỏ ván này hả? 🥺")) return;
+    // In a transaction, and only if nothing changed since this screen last saw
+    // the game: a late tap can't wipe a game the other phone just started.
     try {
-      await setDoc(gameRef, newGame(other(game.startedBy)));
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(gameRef);
+        const savedAt = snap.exists() ? (snap.data() as ScrabbleState).updatedAt : undefined;
+        if (savedAt !== game.updatedAt) throw new GameRuleError("Ván vừa đổi, nhìn lại đã nhé 👀");
+        tx.set(gameRef, newGame(other(game.startedBy)));
+      });
     } catch (err) {
-      console.error("Could not start a new game:", err);
-      showToast("Có lỗi gì đó, thử lại nhé 🥺");
+      if (err instanceof GameRuleError) showToast(err.message);
+      else {
+        console.error("Could not start a new game:", err);
+        showToast("Có lỗi gì đó, thử lại nhé 🥺");
+      }
     }
   };
 
   // Live preview of the move being built (same rules the real move uses).
-  const preview = pending.length > 0 ? evaluatePlay(game.board, pending, isWordIn(words)) : null;
+  const preview = pending.length > 0 && words ? evaluatePlay(game.board, pending, isWordIn(words)) : null;
   const result = finished ? winner(game) : null;
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-col gap-4 px-4 py-8">
       <h1 className="text-center text-3xl font-bold text-zinc-800">Scrabble with Love 💌</h1>
+      {dictError && (
+        <button onClick={onRetryDict} className="text-center text-sm text-rose-500 underline">
+          Không tải được từ điển, thử lại 🔄
+        </button>
+      )}
 
       {/* Scoreboard */}
       <div className="flex items-center justify-center gap-4 text-lg">
@@ -380,8 +441,8 @@ function ScrabbleGame({
 
       <div className="flex flex-col gap-2">
         <Board
-          board={game.board}
-          pending={pending}
+          board={shownBoard}
+          pending={locked ? [] : pending}
           lastMove={lastMove}
           zoom={zoom}
           onCell={tapCell}
@@ -407,6 +468,8 @@ function ScrabbleGame({
       <p className="min-h-6 text-center text-sm">
         {exchanging ? (
           <span className="text-gray-500">Chạm các chữ muốn đổi ({marked.size} chữ)</span>
+        ) : locked || busy ? (
+          <span className="text-gray-400">Đang gửi...</span>
         ) : preview ? (
           preview.ok ? (
             <span className="font-semibold text-pink-600">
@@ -416,6 +479,8 @@ function ScrabbleGame({
           ) : (
             <span className="text-gray-400">{preview.reason}</span>
           )
+        ) : myTurn && !words ? (
+          <span className="text-gray-400">Đang tải từ điển...</span>
         ) : (
           myTurn && <span className="text-gray-400">Chạm một chữ, rồi chạm ô trên bàn</span>
         )}
@@ -452,10 +517,10 @@ function ScrabbleGame({
           <div className="flex flex-col gap-3">
             <button
               onClick={play}
-              disabled={!myTurn || !preview?.ok || busy}
+              disabled={!myTurn || !words || !preview?.ok || busy || !!locked}
               className="rounded-full bg-pink-500 px-8 py-4 text-lg font-semibold text-white shadow-lg shadow-pink-200 transition-all hover:bg-pink-600 active:scale-95 disabled:opacity-40 disabled:shadow-none"
             >
-              {busy ? "Đang gửi..." : myTurn ? `Đánh ${preview?.ok ? `+${preview.total} ` : ""}💌` : `Đợi ${NAME[game.turn]} nhé ⏳`}
+              {busy || locked ? "Đang gửi..." : myTurn ? `Đánh ${preview?.ok ? `+${preview.total} ` : ""}💌` : `Đợi ${NAME[game.turn]} nhé ⏳`}
             </button>
             <div className="flex flex-wrap justify-center gap-2 text-sm">
               <button
@@ -559,6 +624,8 @@ function ScrabbleGame({
           </div>
         </div>
       )}
+
+      {badge}
     </main>
   );
 }
