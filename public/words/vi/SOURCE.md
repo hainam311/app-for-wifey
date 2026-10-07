@@ -1,16 +1,25 @@
-# Vietnamese meanings — source and license
+# Vietnamese meanings — sources
 
 The files in this folder (`a.json` … `z.json`) hold Vietnamese meanings for
-the words in `../cel.txt`. They are derived from the **Vietnamese Wiktionary**
-(https://vi.wiktionary.org), as extracted by Wiktextract
-(https://kaikki.org/dictionary/rawdata.html, file `vi-extract.jsonl.gz`).
+the words in `../cel.txt`. One file per first letter, so a game only downloads
+the letters it needs.
 
-Wiktionary content is licensed under the **Creative Commons
-Attribution-ShareAlike 4.0 International License (CC BY-SA 4.0)**:
-https://creativecommons.org/licenses/by-sa/4.0/
+Two sources are mixed by `scripts/mix_vi_dict.py`:
 
-Changes made: only English entries whose word is in CEL were kept, trimmed to
-at most 2 parts of speech and 3 meanings each; inflected forms point to their
-base word. These files are shared under the same CC BY-SA 4.0 license.
+1. **Anh–Việt textbook list** — exact `@word /pronunciation/` entries from
+   https://github.com/manhminno/English-Vietnamese-Dictionary
+   (`data/english-vietnamese.txt`). Phrases and the no-pronunciation technical
+   glossary are not used. That repo has no license file; these glosses are
+   kept for this private app and are not a claim that the list is free to
+   republish.
+2. **Vietnamese Wiktionary**, via Wiktextract
+   (https://kaikki.org/dictionary/rawdata.html), for CEL words the textbook
+   list does not have. Wiktionary text is **CC BY-SA 4.0**:
+   https://creativecommons.org/licenses/by-sa/4.0/
 
-Rebuild with `scripts/build_vi_dict.py`.
+A word with no entry of its own points at a base word (`cities` → `city`)
+when that base has a meaning. About 14% of CEL still has neither source.
+
+Rebuild:
+
+    python3 scripts/mix_vi_dict.py /tmp/en-vi.txt

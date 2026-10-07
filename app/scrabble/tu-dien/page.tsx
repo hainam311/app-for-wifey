@@ -140,7 +140,7 @@ export default function TuDienPage() {
       )}
 
       <p className="pt-2 text-center text-xs text-gray-400">
-        Nghĩa từ{" "}
+        Nghĩa từ từ điển Anh-Việt và{" "}
         <a href="https://vi.wiktionary.org" target="_blank" rel="noopener noreferrer" className="underline">
           Wiktionary tiếng Việt
         </a>{" "}
