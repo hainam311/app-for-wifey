@@ -36,6 +36,26 @@ type DamageFloat = {
   bornAt: number;
 };
 
+type DebrisParticle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  r: number;
+  color: string;
+  bornAt: number;
+  lifeMs: number;
+};
+
+type WindMote = {
+  x: number;
+  y: number;
+  size: number;
+  speedMul: number;
+  driftY: number;
+  phase: number;
+};
+
 type Props = {
   state: TankState;
   aim: Aim;
@@ -47,6 +67,54 @@ type Props = {
   onPlaybackDone: (shotN: number) => void;
   onDragAim?: (angle: number, facing: 1 | -1) => void;
 };
+
+const THEMES = [
+  {
+    // 0: Sakura Sunset
+    skyTop: "#1e1b4b",
+    skyMid: "#be185d",
+    skyBot: "#fda4af",
+    hillFar: "rgba(131, 24, 67, 0.35)",
+    hillNear: "rgba(157, 23, 77, 0.48)",
+    grassTop: "#4ade80",
+    grassEdge: "#16a34a",
+    topsoil: "#78350f",
+    earthMid: "#451a03",
+    earthDeep: "#270e02",
+    moteColor: "rgba(255, 228, 230, 0.8)",
+    stars: true,
+  },
+  {
+    // 1: Sunny Meadow
+    skyTop: "#0284c7",
+    skyMid: "#7dd3fc",
+    skyBot: "#fef9c3",
+    hillFar: "rgba(56, 189, 248, 0.35)",
+    hillNear: "rgba(14, 116, 144, 0.32)",
+    grassTop: "#4ade80",
+    grassEdge: "#15803d",
+    topsoil: "#854d0e",
+    earthMid: "#5c3409",
+    earthDeep: "#3b1f04",
+    moteColor: "rgba(255, 255, 255, 0.75)",
+    stars: false,
+  },
+  {
+    // 2: Starlight Night
+    skyTop: "#090d16",
+    skyMid: "#1e1b4b",
+    skyBot: "#312e81",
+    hillFar: "rgba(30, 27, 75, 0.6)",
+    hillNear: "rgba(15, 23, 42, 0.7)",
+    grassTop: "#2dd4bf",
+    grassEdge: "#0d9488",
+    topsoil: "#334155",
+    earthMid: "#1e293b",
+    earthDeep: "#0f172a",
+    moteColor: "rgba(253, 224, 71, 0.85)",
+    stars: true,
+  },
+] as const;
 
 export default function Field({
   state,
@@ -61,6 +129,8 @@ export default function Field({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const floatsRef = useRef<DamageFloat[]>([]);
+  const debrisRef = useRef<DebrisParticle[]>([]);
+  const motesRef = useRef<WindMote[]>([]);
   const draggingRef = useRef(false);
 
   // Keep latest props in a ref so the requestAnimationFrame loop never reads stale closures
@@ -86,6 +156,19 @@ export default function Field({
   });
 
   useEffect(() => {
+    if (motesRef.current.length === 0) {
+      for (let i = 0; i < 28; i++) {
+        motesRef.current.push({
+          x: (i * 47) % WORLD_W,
+          y: 160 + ((i * 73) % (WORLD_H - 170)),
+          size: 2 + (i % 3) * 1.2,
+          speedMul: 0.7 + (i % 5) * 0.2,
+          driftY: 8 + (i % 4) * 4,
+          phase: i * 1.3,
+        });
+      }
+    }
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
@@ -95,8 +178,14 @@ export default function Field({
     let playbackStart = 0;
     let currentShotN: number | null = null;
     let completedShotN: number | null = null;
+    let spawnedDebrisForN: number | null = null;
+    let lastFrameTime = performance.now();
+    let cloudOffset = 0;
 
     const render = (now: number) => {
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameTime) / 1000));
+      lastFrameTime = now;
+
       const {
         state: curState,
         aim: curAim,
@@ -122,15 +211,24 @@ export default function Field({
       const wx = (x: number) => x * scaleX;
       const wy = (y: number) => (WORLD_H - y) * scaleY;
 
+      const theme = THEMES[Math.abs(curState.gameId) % THEMES.length];
+      const activeWind = pb ? pb.shot.wind : curState.wind;
+
       // Determine what ground & tanks to draw (pre-shot during animation, or current)
       let drawGround = curState.ground;
       let drawTanks: { nam: Tank; linh: Tank } = {
         nam: { ...curState.tanks.nam },
         linh: { ...curState.tanks.linh },
       };
-      let shellPos: { x: number; y: number; kind: LastShot["kind"] } | null =
-        null;
+      let shellPos: {
+        x: number;
+        y: number;
+        vx: number;
+        vy: number;
+        kind: LastShot["kind"];
+      } | null = null;
       let shellTrail: number[] | null = null;
+      let muzzleFlash: { x: number; y: number; alpha: number } | null = null;
       let boomCircle: {
         x: number;
         y: number;
@@ -138,6 +236,8 @@ export default function Field({
         progress: number;
         kind: LastShot["kind"];
       } | null = null;
+      let shakeX = 0;
+      let shakeY = 0;
 
       if (pb) {
         if (currentShotN !== pb.shot.n) {
@@ -150,9 +250,8 @@ export default function Field({
         const driveMs =
           driveDist > 0 ? Math.min(500, Math.max(180, driveDist * 4)) : 0;
         const numPoints = Math.floor(shot.path.length / 2);
-        // Path saves every 2nd physics step (1/30s per point). Play slightly briskly (~45 pts/s).
         const flightMs = Math.max(160, (numPoints / 45) * 1000);
-        const boomMs = shot.boom ? 400 : 60;
+        const boomMs = shot.boom ? 440 : 60;
         const elapsed = now - playbackStart;
 
         drawGround = pb.preGround;
@@ -194,13 +293,27 @@ export default function Field({
           shellPos = {
             x: x0 + (x1 - x0) * frac,
             y: y0 + (y1 - y0) * frac,
+            vx: x1 - x0,
+            vy: y1 - y0,
             kind: shot.kind,
           };
           shellTrail = shot.path.slice(0, (i0 + 1) * 2);
+
+          // Muzzle flash during first 110ms of flight
+          if (fElapsed < 110) {
+            const rad = (shot.angle * Math.PI) / 180;
+            const shooterFacing = drawTanks[shot.by].facing;
+            const ty = tankY(drawGround, shot.fromX);
+            muzzleFlash = {
+              x: shot.fromX + Math.cos(rad) * shooterFacing * (TANK_R + 12),
+              y: ty + 2 + Math.sin(rad) * (TANK_R + 12),
+              alpha: 1 - fElapsed / 110,
+            };
+          }
         } else if (elapsed < driveMs + flightMs + boomMs) {
           const bElapsed = elapsed - driveMs - flightMs;
           const bt = Math.min(1, bElapsed / boomMs);
-          if (bt >= 0.45) {
+          if (bt >= 0.35) {
             drawGround = pb.postGround;
             drawTanks = {
               nam: { ...pb.postTanks.nam },
@@ -221,9 +334,39 @@ export default function Field({
               progress: bt,
               kind: shot.kind,
             };
+            // Screen shake decaying over the explosion
+            const mag = (1 - bt) * (shot.kind === "ss" ? 9 : shot.kind === "s2" ? 7 : 5);
+            shakeX = (Math.sin(now * 0.09) * mag) * scaleX;
+            shakeY = (Math.cos(now * 0.11) * mag) * scaleY;
+
+            // Spawn flying dirt & spark particles once at explosion start
+            if (spawnedDebrisForN !== shot.n) {
+              spawnedDebrisForN = shot.n;
+              const count = shot.kind === "ss" ? 28 : 20;
+              for (let k = 0; k < count; k++) {
+                const ang = (Math.PI * k) / count + (k % 3) * 0.18;
+                const spd = 90 + ((k * 53) % 190);
+                const isSpark = k % 2 === 0;
+                debrisRef.current.push({
+                  x: shot.boom.x,
+                  y: shot.boom.y,
+                  vx: Math.cos(ang) * spd * (k % 4 === 0 ? -0.6 : 1),
+                  vy: Math.abs(Math.sin(ang)) * spd + 60,
+                  r: isSpark ? 2.5 : 3.5,
+                  color: isSpark
+                    ? shot.kind === "ss"
+                      ? "#fde047"
+                      : shot.kind === "s2"
+                        ? "#2dd4bf"
+                        : "#fb923c"
+                    : theme.topsoil,
+                  bornAt: now,
+                  lifeMs: 550 + ((k * 37) % 350),
+                });
+              }
+            }
           }
         } else {
-          // Animation complete! Spawn floating damage numbers and notify parent once
           drawGround = pb.postGround;
           drawTanks = {
             nam: { ...pb.postTanks.nam },
@@ -240,7 +383,7 @@ export default function Field({
                   player: p,
                   amount: dmg,
                   x: tx,
-                  y: Math.max(60, ty + 28),
+                  y: Math.max(70, ty + 32),
                   bornAt: now,
                 });
               }
@@ -250,8 +393,6 @@ export default function Field({
         }
       } else {
         currentShotN = null;
-        // Apply live local drive + angle on the active player's screen
-        // (use isMyTurn so the tank does not snap back while the shot transaction is in flight)
         if (isMyTurn && curState.status === "playing") {
           const active = curState.turn;
           drawTanks[active] = {
@@ -263,28 +404,135 @@ export default function Field({
         }
       }
 
-      // --- 1. Draw sky gradient ---
-      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
-      sky.addColorStop(0, "#e0f2fe"); // soft sky blue
-      sky.addColorStop(0.55, "#fdf2f8"); // warm pink mist
-      sky.addColorStop(1, "#fce7f3"); // light rose horizon
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+      ctx.translate(shakeX, shakeY);
 
-      // Soft decorative clouds
-      ctx.fillStyle = "rgba(255, 255, 255, 0.65)";
-      const clouds = [
-        [210, 500, 55, 18],
-        [620, 530, 75, 22],
-        [980, 485, 60, 19],
+      // --- 1. Sky gradient + Stars/Moon/Sun + Parallax hills ---
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, theme.skyTop);
+      sky.addColorStop(0.58, theme.skyMid);
+      sky.addColorStop(1, theme.skyBot);
+      ctx.fillStyle = sky;
+      ctx.fillRect(-16, -16, canvas.width + 32, canvas.height + 32);
+
+      if (theme.stars) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+        for (let s = 0; s < 26; s++) {
+          const sx = ((s * 97 + 31) % WORLD_W) * scaleX;
+          const sy = wy(360 + ((s * 53) % 220));
+          const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(now * 0.002 + s));
+          ctx.globalAlpha = twinkle;
+          ctx.beginPath();
+          ctx.arc(sx, sy, (1.1 + (s % 2) * 0.7) * scaleX, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Glowing moon / sun disc
+      const orbX = wx(960);
+      const orbY = wy(495);
+      const orbGrad = ctx.createRadialGradient(
+        orbX,
+        orbY,
+        4 * scaleX,
+        orbX,
+        orbY,
+        54 * scaleX
+      );
+      orbGrad.addColorStop(0, "rgba(255, 255, 240, 0.92)");
+      orbGrad.addColorStop(0.4, "rgba(254, 240, 138, 0.35)");
+      orbGrad.addColorStop(1, "rgba(254, 240, 138, 0)");
+      ctx.fillStyle = orbGrad;
+      ctx.beginPath();
+      ctx.arc(orbX, orbY, 54 * scaleX, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Parallax background mountains
+      ctx.fillStyle = theme.hillFar;
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height);
+      for (let x = 0; x <= WORLD_W; x += 40) {
+        const mh =
+          230 +
+          55 * Math.sin(x * 0.0055 + 1.1) +
+          30 * Math.cos(x * 0.012 + 0.4);
+        ctx.lineTo(wx(x), wy(mh));
+      }
+      ctx.lineTo(canvas.width, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = theme.hillNear;
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height);
+      for (let x = 0; x <= WORLD_W; x += 30) {
+        const mh =
+          185 +
+          40 * Math.sin(x * 0.008 + 2.5) +
+          22 * Math.sin(x * 0.017 + 0.9);
+        ctx.lineTo(wx(x), wy(mh));
+      }
+      ctx.lineTo(canvas.width, canvas.height);
+      ctx.closePath();
+      ctx.fill();
+
+      // Drifting fluffy clouds pushed by wind
+      cloudOffset = (cloudOffset + activeWind * 3.2 * dt + WORLD_W) % WORLD_W;
+      ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+      const baseClouds = [
+        [180, 505, 58, 17],
+        [540, 535, 76, 21],
+        [890, 485, 64, 18],
       ];
-      for (const [cx, cy, rx, ry] of clouds) {
+      for (const [bx, cy, rx, ry] of baseClouds) {
+        const cx = ((bx + cloudOffset) % WORLD_W);
         ctx.beginPath();
         ctx.ellipse(wx(cx), wy(cy), rx * scaleX, ry * scaleY, 0, 0, Math.PI * 2);
+        ctx.ellipse(
+          wx(cx - rx * 0.45),
+          wy(cy - 4),
+          rx * 0.65 * scaleX,
+          ry * 0.8 * scaleY,
+          0,
+          0,
+          Math.PI * 2
+        );
+        ctx.ellipse(
+          wx(cx + rx * 0.45),
+          wy(cy - 3),
+          rx * 0.6 * scaleX,
+          ry * 0.75 * scaleY,
+          0,
+          0,
+          Math.PI * 2
+        );
         ctx.fill();
       }
 
-      // --- 2. Draw terrain polygon ---
+      // Drifting wind motes / petals showing wind direction & speed
+      ctx.fillStyle = theme.moteColor;
+      for (const m of motesRef.current) {
+        const windVx = activeWind === 0 ? 4 : activeWind * 9 * m.speedMul;
+        m.x = (m.x + windVx * dt + WORLD_W) % WORLD_W;
+        m.y -= m.driftY * dt;
+        if (m.y < 140) m.y = WORLD_H - 10;
+        const swayX = m.x + Math.sin(now * 0.003 + m.phase) * 6;
+        ctx.beginPath();
+        ctx.ellipse(
+          wx(swayX),
+          wy(m.y),
+          m.size * scaleX,
+          m.size * 0.65 * scaleY,
+          Math.sin(now * 0.004 + m.phase),
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+      }
+
+      // --- 2. Multi-layer Terrain ---
+      // Deep earth body
       ctx.beginPath();
       ctx.moveTo(0, canvas.height);
       for (let i = 0; i < COLS; i++) {
@@ -297,16 +545,18 @@ export default function Field({
       ctx.lineTo(canvas.width, canvas.height);
       ctx.closePath();
 
-      const earth = ctx.createLinearGradient(0, wy(420), 0, canvas.height);
-      earth.addColorStop(0, "#a16207");
-      earth.addColorStop(0.35, "#854d0e");
-      earth.addColorStop(1, "#5c3409");
-      ctx.fillStyle = earth;
+      const earthGrad = ctx.createLinearGradient(0, wy(420), 0, canvas.height);
+      earthGrad.addColorStop(0, theme.topsoil);
+      earthGrad.addColorStop(0.32, theme.earthMid);
+      earthGrad.addColorStop(1, theme.earthDeep);
+      ctx.fillStyle = earthGrad;
       ctx.fill();
 
-      // Green grass cap along non-zero ground columns
-      ctx.lineWidth = Math.max(2, 4 * scaleY);
-      ctx.strokeStyle = "#22c55e";
+      // Topsoil band & grass cap along non-zero ground columns
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = Math.max(3, 7 * scaleY);
+      ctx.strokeStyle = theme.grassEdge;
       ctx.beginPath();
       let penDown = false;
       for (let i = 0; i < COLS; i++) {
@@ -315,221 +565,415 @@ export default function Field({
           penDown = false;
           continue;
         }
-        const x0 = wx(i * COL_W);
-        const x1 = wx((i + 1) * COL_W);
-        const y = wy(h);
+        const cx = wx(i * COL_W + COL_W / 2);
+        const cy = wy(h - 2);
         if (!penDown) {
-          ctx.moveTo(x0, y);
+          ctx.moveTo(cx, cy);
           penDown = true;
         } else {
-          ctx.lineTo(x0, y);
+          ctx.lineTo(cx, cy);
         }
-        ctx.lineTo(x1, y);
       }
       ctx.stroke();
 
-      // --- 3. Draw tanks ---
+      ctx.lineWidth = Math.max(2, 4 * scaleY);
+      ctx.strokeStyle = theme.grassTop;
+      ctx.beginPath();
+      penDown = false;
+      for (let i = 0; i < COLS; i++) {
+        const h = drawGround[i] ?? 0;
+        if (h <= 0) {
+          penDown = false;
+          continue;
+        }
+        const cx = wx(i * COL_W + COL_W / 2);
+        const cy = wy(h);
+        if (!penDown) {
+          ctx.moveTo(cx, cy);
+          penDown = true;
+        } else {
+          ctx.lineTo(cx, cy);
+        }
+      }
+      ctx.stroke();
+
+      // --- 3. Chibi GunBound-style Tanks ---
       for (const p of ["nam", "linh"] as const) {
         const t = drawTanks[p];
         if (!t.alive && t.hp <= 0 && groundAt(drawGround, t.x) <= 0) {
-          continue; // fell into the abyss
+          continue;
         }
         const tx = t.x;
         const ty = tankY(drawGround, tx);
         const cx = wx(tx);
         const cy = wy(ty);
         const isNam = p === "nam";
+
         const bodyColor = !t.alive
           ? "#71717a"
           : isNam
             ? "#f43f5e"
             : "#0ea5e9";
+        const hiColor = !t.alive
+          ? "#a1a1aa"
+          : isNam
+            ? "#fda4af"
+            : "#7dd3fc";
         const darkColor = !t.alive
           ? "#3f3f46"
           : isNam
-            ? "#be123c"
-            : "#0369a1";
+            ? "#9f1239"
+            : "#075985";
 
         const angleToShow =
-          !pb && isPlayable && curState.turn === p
-            ? curAim.angle
-            : t.lastAngle;
+          !pb && isMyTurn && curState.turn === p ? curAim.angle : t.lastAngle;
         const rad = (angleToShow * Math.PI) / 180;
         const dirX = Math.cos(rad) * t.facing;
         const dirY = Math.sin(rad);
 
-        // Aim guide line for active player when aiming
-        if (!pb && isPlayable && curState.status === "playing" && curState.turn === p && t.alive) {
+        // Subtle SS ready aura around active tank when SS is selected
+        if (
+          !pb &&
+          isMyTurn &&
+          curState.turn === p &&
+          curAim.kind === "ss" &&
+          t.alive
+        ) {
+          const auraR = (TANK_R + 10 + Math.sin(now * 0.01) * 3) * scaleX;
+          const aura = ctx.createRadialGradient(
+            cx,
+            cy,
+            4 * scaleX,
+            cx,
+            cy,
+            auraR
+          );
+          aura.addColorStop(0, "rgba(250, 204, 21, 0.45)");
+          aura.addColorStop(1, "rgba(250, 204, 21, 0)");
+          ctx.fillStyle = aura;
+          ctx.beginPath();
+          ctx.arc(cx, cy, auraR, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Aim arc & guide line for active player
+        if (
+          !pb &&
+          isPlayable &&
+          curState.status === "playing" &&
+          curState.turn === p &&
+          t.alive
+        ) {
           ctx.save();
-          ctx.setLineDash([5 * scaleX, 5 * scaleX]);
+          // Faint angle arc
+          ctx.beginPath();
+          const startAng = t.facing === 1 ? 0 : Math.PI;
+          const endAng =
+            t.facing === 1 ? -rad : Math.PI + rad;
+          ctx.arc(
+            cx,
+            cy - 2 * scaleY,
+            34 * scaleX,
+            startAng,
+            endAng,
+            t.facing === 1
+          );
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
+          ctx.lineWidth = Math.max(1, 1.5 * scaleX);
+          ctx.stroke();
+
+          // Aim sight line
+          ctx.setLineDash([5 * scaleX, 4 * scaleX]);
           ctx.strokeStyle = isNam
-            ? "rgba(244, 63, 94, 0.75)"
-            : "rgba(14, 165, 233, 0.75)";
-          ctx.lineWidth = Math.max(1.5, 2.2 * scaleX);
+            ? "rgba(255, 228, 230, 0.9)"
+            : "rgba(224, 242, 254, 0.9)";
+          ctx.lineWidth = Math.max(1.8, 2.5 * scaleX);
           ctx.beginPath();
           ctx.moveTo(cx + dirX * 18 * scaleX, cy - dirY * 18 * scaleY);
-          ctx.lineTo(cx + dirX * 68 * scaleX, cy - dirY * 68 * scaleY);
+          ctx.lineTo(cx + dirX * 72 * scaleX, cy - dirY * 72 * scaleY);
           ctx.stroke();
           ctx.restore();
         }
 
-        // Barrel
+        // Calculate terrain slope under treads for natural tank tilt
+        const hL = groundAt(drawGround, tx - 8);
+        const hR = groundAt(drawGround, tx + 8);
+        const tilt = Math.max(
+          -0.38,
+          Math.min(0.38, Math.atan2(hL - hR, 16))
+        );
+
+        // Barrel (always in world angle space)
         ctx.save();
         ctx.strokeStyle = darkColor;
-        ctx.lineWidth = Math.max(2.5, 5 * scaleX);
+        ctx.lineWidth = Math.max(3, 6 * scaleX);
         ctx.lineCap = "round";
         ctx.beginPath();
-        ctx.moveTo(cx, cy - 2 * scaleY);
+        ctx.moveTo(cx, cy - 3 * scaleY);
         ctx.lineTo(
-          cx + dirX * (TANK_R + 10) * scaleX,
-          cy - 2 * scaleY - dirY * (TANK_R + 10) * scaleY
+          cx + dirX * (TANK_R + 11) * scaleX,
+          cy - 3 * scaleY - dirY * (TANK_R + 11) * scaleY
+        );
+        ctx.stroke();
+
+        ctx.strokeStyle = hiColor;
+        ctx.lineWidth = Math.max(1.2, 2 * scaleX);
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - 4 * scaleY);
+        ctx.lineTo(
+          cx + dirX * (TANK_R + 9) * scaleX,
+          cy - 4 * scaleY - dirY * (TANK_R + 9) * scaleY
         );
         ctx.stroke();
         ctx.restore();
 
-        // Tank dome & hull
+        // Tilted tank chassis + turret + wheels
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(tilt);
+
+        // Turret dome
         ctx.fillStyle = bodyColor;
         ctx.strokeStyle = darkColor;
         ctx.lineWidth = Math.max(1.5, 2 * scaleX);
         ctx.beginPath();
-        ctx.arc(cx, cy - 2 * scaleY, 9 * scaleX, Math.PI, 0);
+        ctx.arc(0, -2 * scaleY, 9.5 * scaleX, Math.PI, 0);
         ctx.fill();
         ctx.stroke();
 
+        // Dome specular shine
+        ctx.fillStyle = hiColor;
+        ctx.beginPath();
+        ctx.ellipse(
+          -3 * scaleX * t.facing,
+          -6.5 * scaleY,
+          3.5 * scaleX,
+          1.8 * scaleY,
+          -0.3 * t.facing,
+          0,
+          Math.PI * 2
+        );
+        ctx.fill();
+
+        // Main armored hull
+        ctx.fillStyle = bodyColor;
         ctx.beginPath();
         ctx.roundRect(
-          cx - TANK_R * scaleX,
-          cy - 3 * scaleY,
+          -TANK_R * scaleX,
+          -3 * scaleY,
           TANK_R * 2 * scaleX,
           10 * scaleY,
-          4 * scaleX
+          5 * scaleX
         );
         ctx.fill();
         ctx.stroke();
 
-        // Treads
-        ctx.fillStyle = darkColor;
+        // Caterpillar tread belt
+        ctx.fillStyle = "#27272a";
+        ctx.strokeStyle = darkColor;
+        ctx.lineWidth = Math.max(1, 1.5 * scaleX);
         ctx.beginPath();
         ctx.roundRect(
-          cx - (TANK_R - 2) * scaleX,
-          cy + 5 * scaleY,
-          (TANK_R - 2) * 2 * scaleX,
+          -(TANK_R - 1) * scaleX,
           5 * scaleY,
-          2.5 * scaleX
+          (TANK_R - 1) * 2 * scaleX,
+          6.5 * scaleY,
+          3.2 * scaleX
         );
         ctx.fill();
+        ctx.stroke();
 
-        // Label + mini HP bar above tank
+        // 4 road wheels inside treads
+        ctx.fillStyle = hiColor;
+        for (const wxOff of [-8.5, -2.8, 2.8, 8.5]) {
+          ctx.beginPath();
+          ctx.arc(
+            wxOff * scaleX,
+            8.2 * scaleY,
+            1.8 * scaleX,
+            0,
+            Math.PI * 2
+          );
+          ctx.fill();
+        }
+        ctx.restore();
+
+        // Pilot badge & mini HP bar above tank
         const labelY = cy - (TANK_R + 18) * scaleY;
-        const barW = 34 * scaleX;
-        const barH = Math.max(3, 4.5 * scaleY);
-        ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
-        ctx.fillRect(cx - barW / 2, labelY, barW, barH);
-        ctx.fillStyle = isNam ? "#f43f5e" : "#0ea5e9";
-        ctx.fillRect(
+        const barW = 36 * scaleX;
+        const barH = Math.max(3.5, 5 * scaleY);
+        ctx.fillStyle = "rgba(24, 24, 27, 0.65)";
+        ctx.beginPath();
+        ctx.roundRect(cx - barW / 2 - 1, labelY - 1, barW + 2, barH + 2, 3);
+        ctx.fill();
+
+        ctx.fillStyle = isNam ? "#fb7185" : "#38bdf8";
+        ctx.beginPath();
+        ctx.roundRect(
           cx - barW / 2,
           labelY,
           barW * Math.max(0, Math.min(1, t.hp / MAX_HP)),
-          barH
+          barH,
+          2
         );
+        ctx.fill();
 
-        ctx.font = `${Math.max(11, Math.round(14 * scaleX))}px sans-serif`;
+        ctx.font = `${Math.max(12, Math.round(15 * scaleX))}px sans-serif`;
         ctx.textAlign = "center";
-        ctx.fillStyle = "#18181b";
-        ctx.fillText(isNam ? "🐻" : "🧸", cx, labelY - 4 * scaleY);
+        const emoji = !t.alive ? "😵" : isNam ? "🐻" : "🧸";
+        ctx.fillText(emoji, cx, labelY - 4 * scaleY);
       }
 
-      // --- 4. Draw shell trail & shell in flight ---
-      if (shellTrail && shellTrail.length >= 4) {
+      // --- 4. Muzzle flash, shell smoke puffs & shell in flight ---
+      if (muzzleFlash) {
+        const mx = wx(muzzleFlash.x);
+        const my = wy(muzzleFlash.y);
         ctx.save();
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.7)";
-        ctx.lineWidth = Math.max(1.5, 2 * scaleX);
-        ctx.setLineDash([3 * scaleX, 4 * scaleX]);
+        ctx.globalAlpha = muzzleFlash.alpha;
+        ctx.fillStyle = "#fef08a";
         ctx.beginPath();
-        ctx.moveTo(wx(shellTrail[0]), wy(shellTrail[1]));
-        for (let i = 2; i < shellTrail.length; i += 2) {
-          ctx.lineTo(wx(shellTrail[i]), wy(shellTrail[i + 1]));
-        }
-        ctx.stroke();
+        ctx.arc(mx, my, 12 * scaleX, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
+      }
+
+      if (shellTrail && shellTrail.length >= 4) {
+        const totalPts = shellTrail.length / 2;
+        for (let i = 0; i < shellTrail.length; i += 4) {
+          const idx = i / 2;
+          const ageRatio = idx / totalPts;
+          const px = wx(shellTrail[i]);
+          const py = wy(shellTrail[i + 1]);
+          const puffR = (2 + (1 - ageRatio) * 3.5) * scaleX;
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.15 + ageRatio * 0.45})`;
+          ctx.beginPath();
+          ctx.arc(px, py, puffR, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
 
       if (shellPos) {
         const sx = wx(shellPos.x);
         const sy = wy(shellPos.y);
         const r =
-          (shellPos.kind === "ss" ? 7 : shellPos.kind === "s2" ? 5.5 : 4.5) *
+          (shellPos.kind === "ss" ? 7.5 : shellPos.kind === "s2" ? 6 : 5) *
           scaleX;
         ctx.save();
         ctx.beginPath();
-        ctx.arc(sx, sy, r * 1.6, 0, Math.PI * 2);
+        ctx.arc(sx, sy, r * 1.9, 0, Math.PI * 2);
         ctx.fillStyle =
           shellPos.kind === "ss"
-            ? "rgba(250, 204, 21, 0.45)"
+            ? "rgba(250, 204, 21, 0.55)"
             : shellPos.kind === "s2"
-              ? "rgba(20, 184, 166, 0.4)"
-              : "rgba(249, 115, 22, 0.4)";
+              ? "rgba(45, 212, 191, 0.5)"
+              : "rgba(251, 146, 60, 0.5)";
         ctx.fill();
 
         ctx.beginPath();
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fillStyle =
           shellPos.kind === "ss"
-            ? "#eab308"
+            ? "#fef08a"
             : shellPos.kind === "s2"
-              ? "#0d9488"
-              : "#18181b";
+              ? "#14b8a6"
+              : "#fff7ed";
         ctx.fill();
-        ctx.restore();
-      }
-
-      // --- 5. Draw explosion circle ---
-      if (boomCircle) {
-        const bx = wx(boomCircle.x);
-        const by = wy(boomCircle.y);
-        const curR =
-          boomCircle.r * (0.35 + 0.75 * Math.sin(boomCircle.progress * Math.PI)) * scaleX;
-        const alpha = Math.max(0, 1 - boomCircle.progress * 0.85);
-        ctx.save();
-        ctx.beginPath();
-        ctx.arc(bx, by, curR, 0, Math.PI * 2);
-        ctx.fillStyle =
-          boomCircle.kind === "ss"
-            ? `rgba(250, 204, 21, ${alpha})`
-            : boomCircle.kind === "s2"
-              ? `rgba(45, 212, 191, ${alpha})`
-              : `rgba(249, 115, 22, ${alpha})`;
-        ctx.fill();
-        ctx.lineWidth = Math.max(2, 3 * scaleX);
-        ctx.strokeStyle = `rgba(239, 68, 68, ${alpha})`;
+        ctx.lineWidth = Math.max(1.5, 2 * scaleX);
+        ctx.strokeStyle =
+          shellPos.kind === "ss"
+            ? "#ca8a04"
+            : shellPos.kind === "s2"
+              ? "#0f766e"
+              : "#ea580c";
         ctx.stroke();
         ctx.restore();
       }
 
-      // --- 6. Draw floating damage numbers (-250) for 1 s ---
+      // --- 5. Multi-stage explosion & flying debris ---
+      if (boomCircle) {
+        const bx = wx(boomCircle.x);
+        const by = wy(boomCircle.y);
+        const p = boomCircle.progress;
+        const maxR = boomCircle.r * scaleX;
+        const curR = maxR * (0.3 + 0.8 * Math.sin(p * Math.PI));
+        const alpha = Math.max(0, 1 - p * 0.85);
+
+        ctx.save();
+        // Expanding shockwave ring
+        ctx.beginPath();
+        ctx.arc(bx, by, maxR * (0.4 + p * 0.85), 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${Math.max(0, 0.8 - p)})`;
+        ctx.lineWidth = Math.max(2, 3.5 * scaleX);
+        ctx.stroke();
+
+        // Outer fireball
+        const fireGrad = ctx.createRadialGradient(bx, by, curR * 0.1, bx, by, curR);
+        if (boomCircle.kind === "ss") {
+          fireGrad.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+          fireGrad.addColorStop(0.45, `rgba(250, 204, 21, ${alpha})`);
+          fireGrad.addColorStop(1, `rgba(234, 88, 12, 0)`);
+        } else if (boomCircle.kind === "s2") {
+          fireGrad.addColorStop(0, `rgba(240, 253, 250, ${alpha})`);
+          fireGrad.addColorStop(0.5, `rgba(45, 212, 191, ${alpha})`);
+          fireGrad.addColorStop(1, `rgba(15, 118, 110, 0)`);
+        } else {
+          fireGrad.addColorStop(0, `rgba(254, 249, 195, ${alpha})`);
+          fireGrad.addColorStop(0.5, `rgba(249, 115, 22, ${alpha})`);
+          fireGrad.addColorStop(1, `rgba(220, 38, 38, 0)`);
+        }
+        ctx.fillStyle = fireGrad;
+        ctx.beginPath();
+        ctx.arc(bx, by, curR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Flying debris particles
+      const liveDebris: DebrisParticle[] = [];
+      for (const d of debrisRef.current) {
+        const age = now - d.bornAt;
+        if (age < d.lifeMs) {
+          liveDebris.push(d);
+          d.vy -= 360 * dt;
+          d.x += d.vx * dt;
+          d.y += d.vy * dt;
+          const alpha = 1 - age / d.lifeMs;
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.fillStyle = d.color;
+          ctx.beginPath();
+          ctx.arc(wx(d.x), wy(d.y), d.r * scaleX, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+      debrisRef.current = liveDebris;
+
+      // --- 6. Floating damage numbers (-250) ---
       const activeFloats: DamageFloat[] = [];
       for (const f of floatsRef.current) {
         const age = now - f.bornAt;
-        if (age < 1000) {
+        if (age < 1100) {
           activeFloats.push(f);
-          const t = age / 1000;
+          const t = age / 1100;
           const fx = wx(f.x);
-          const fy = wy(f.y + t * 36);
+          const fy = wy(f.y + t * 42);
           ctx.save();
-          ctx.font = `bold ${Math.max(13, Math.round(18 * scaleX))}px sans-serif`;
+          ctx.font = `900 ${Math.max(14, Math.round(20 * scaleX))}px sans-serif`;
           ctx.textAlign = "center";
-          ctx.globalAlpha = 1 - t * 0.8;
-          ctx.strokeStyle = "#ffffff";
-          ctx.lineWidth = Math.max(2.5, 3.5 * scaleX);
+          ctx.globalAlpha = 1 - t * 0.75;
+          ctx.strokeStyle = "#18181b";
+          ctx.lineWidth = Math.max(3, 4.5 * scaleX);
           const label = `−${f.amount}`;
           ctx.strokeText(label, fx, fy);
-          ctx.fillStyle = "#e11d48";
+          ctx.fillStyle = "#fde047";
           ctx.fillText(label, fx, fy);
           ctx.restore();
         }
       }
       floatsRef.current = activeFloats;
 
+      ctx.restore();
       rafId = requestAnimationFrame(render);
     };
 
@@ -563,31 +1007,29 @@ export default function Field({
   };
 
   return (
-    <div className="flex w-full justify-center">
-      <canvas
-        ref={canvasRef}
-        aria-label="Chiến trường"
-        data-testid="field"
-        data-shot-n={finishedShotN}
-        data-animating-shot-n={activePlayback?.shot.n ?? 0}
-        onPointerDown={(e) => {
-          if (!playable || activePlayback) return;
-          draggingRef.current = true;
-          e.currentTarget.setPointerCapture(e.pointerId);
-          updateAngleFromPointer(e.clientX, e.clientY);
-        }}
-        onPointerMove={(e) => {
-          if (!draggingRef.current) return;
-          updateAngleFromPointer(e.clientX, e.clientY);
-        }}
-        onPointerUp={() => {
-          draggingRef.current = false;
-        }}
-        onPointerCancel={() => {
-          draggingRef.current = false;
-        }}
-        className="aspect-[2/1] w-[min(100%,calc(2*(100svh-16rem)))] min-w-[280px] touch-none rounded-2xl border-2 border-pink-200 bg-sky-100 shadow-inner"
-      />
-    </div>
+    <canvas
+      ref={canvasRef}
+      aria-label="Chiến trường"
+      data-testid="field"
+      data-shot-n={finishedShotN}
+      data-animating-shot-n={activePlayback?.shot.n ?? 0}
+      onPointerDown={(e) => {
+        if (!playable || activePlayback) return;
+        draggingRef.current = true;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        updateAngleFromPointer(e.clientX, e.clientY);
+      }}
+      onPointerMove={(e) => {
+        if (!draggingRef.current) return;
+        updateAngleFromPointer(e.clientX, e.clientY);
+      }}
+      onPointerUp={() => {
+        draggingRef.current = false;
+      }}
+      onPointerCancel={() => {
+        draggingRef.current = false;
+      }}
+      className="block h-full w-full touch-none select-none"
+    />
   );
 }

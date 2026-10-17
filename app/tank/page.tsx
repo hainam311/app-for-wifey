@@ -23,10 +23,6 @@ import {
   type TankState,
 } from "@/lib/tank/engine";
 
-// One shared artillery game in tank_game/shared. Every action runs inside a
-// Firestore transaction against the latest document; the shooter's browser
-// simulates the shot and writes the resulting state + trajectory so both
-// screens replay the exact same outcome.
 const FIRST_EVER_STARTER: Player = "linh"; // ladies first 💕
 
 class GameRuleError extends Error {}
@@ -45,8 +41,8 @@ function defaultAimFor(state: TankState, who: Player): Aim {
 }
 
 function windLabel(wind: number): string {
-  if (wind === 0) return "Gió 0 ·";
-  return wind > 0 ? `→ ${wind}` : `← ${Math.abs(wind)}`;
+  if (wind === 0) return "🌬️ 0";
+  return wind > 0 ? `🌬️ → ${wind}` : `🌬️ ← ${Math.abs(wind)}`;
 }
 
 function endText(game: TankState): string {
@@ -63,10 +59,6 @@ function endText(game: TankState): string {
       return "";
   }
 }
-
-const Title = () => (
-  <h1 className="text-xl font-bold text-zinc-800 sm:text-2xl">Bắn tăng 💥</h1>
-);
 
 export default function TankPage() {
   const me = useMe();
@@ -102,7 +94,7 @@ export default function TankPage() {
   if (me === null) {
     return (
       <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10 text-center">
-        <Title />
+        <h1 className="text-2xl font-bold text-zinc-800">Bắn tăng 💥</h1>
         <Link href="/lock?next=/tank" className="py-12 text-rose-500 underline">
           Chưa biết máy của ai 🤔 Mở khoá lại nhé
         </Link>
@@ -113,14 +105,12 @@ export default function TankPage() {
   if (!game || me === undefined) {
     return (
       <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10 text-center">
-        <Title />
+        <h1 className="text-2xl font-bold text-zinc-800">Bắn tăng 💥</h1>
         <p className="py-12 text-center text-gray-400">Đang tải...</p>
       </main>
     );
   }
 
-  // Keyed on gameId (not lastShot.n) so the canvas persists across turns and
-  // animations smoothly transition from the previous turn's terrain/HP.
   return (
     <TankGame
       key={game.gameId}
@@ -160,14 +150,11 @@ function TankGame({
     toastTimer.current = setTimeout(() => setToast(""), 2500);
   }, []);
 
-  // Enqueue shot animation whenever lastShot.n advances on a snapshot
   useEffect(() => {
     const shot = game.lastShot;
     const prev = prevStateRef.current;
     if (shot && shot.n > seenShotNRef.current) {
       seenShotNRef.current = shot.n;
-      // On the shooter's own screen (or in hotseat mode), the tank was already
-      // driven locally to shot.fromX before firing, so don't jump back and re-drive.
       const skipDrive = hotseat || shot.by === me;
       setQueue((q) => [
         ...q,
@@ -188,7 +175,6 @@ function TankGame({
 
   const activePlayback = queue[0] ?? null;
 
-  // Hold pre-impact terrain, HP, and wind while an animation is playing
   const displayTanks = activePlayback ? activePlayback.preTanks : game.tanks;
   const displayGround = activePlayback ? activePlayback.preGround : game.ground;
   const displayWind = activePlayback ? activePlayback.shot.wind : game.wind;
@@ -257,7 +243,6 @@ function TankGame({
     run((s) => resign(s, me));
   };
 
-  // Both players may press "Ván mới" at once: only the first transaction wins.
   const startNewGame = () =>
     run((s) =>
       s.status === "over" && s.gameId === game.gameId
@@ -268,147 +253,163 @@ function TankGame({
   const nextStarter = other(game.startedBy);
 
   return (
-    <main className="mx-auto flex w-full max-w-4xl flex-col gap-2.5 px-3 py-4 sm:px-4 sm:py-6">
-      <div className="flex flex-wrap items-center justify-between gap-2 pl-11 sm:pl-0">
-        <Title />
+    <main className="mx-auto flex h-[100svh] w-full max-w-5xl flex-col items-center justify-center p-1.5 sm:p-4">
+      {/* Unified Mobile-Game Window: Canvas + Floating Top/Bottom/Center HUDs */}
+      <div className="relative flex h-full max-h-[680px] w-full flex-col justify-between overflow-hidden rounded-3xl border-2 border-pink-300/70 bg-slate-950 shadow-2xl">
+        {/* Background Battlefield Canvas */}
+        <div className="absolute inset-0">
+          <Field
+            state={game}
+            aim={aim}
+            actualX={actualX}
+            myTurn={myTurn}
+            playable={playable}
+            activePlayback={activePlayback}
+            finishedShotN={finishedShotN}
+            onPlaybackDone={handlePlaybackDone}
+            onDragAim={handleDragAim}
+          />
+        </div>
 
-        <div className="flex flex-col items-end">
-          <p className="text-sm font-medium text-zinc-700" role="status">
-            {!showOver ? (
-              myTurn ? (
-                <b className="inline-block animate-pulse text-rose-500">
-                  {hotseat ? `Lượt của ${NAME[me]}!` : "Lượt của em!"}
-                </b>
-              ) : (
-                <>
-                  Đợi <b>{NAME[game.turn]}</b> bắn…
-                </>
-              )
-            ) : game.winner ? (
-              <b className="inline-block animate-bounce text-base text-rose-500">
-                {game.winner === me
+        {/* TOP HUD OVERLAY (inside the game window) */}
+        <div className="pointer-events-none relative z-10 flex flex-col gap-1.5 p-2.5 pl-12 sm:p-3.5 sm:pl-14">
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-2xl border border-white/20 bg-zinc-950/55 px-3 py-1.5 text-white shadow-lg backdrop-blur-md">
+            {/* Nam HP */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-[11px] font-bold sm:text-xs">
+                <span className="truncate">🐻 Nam</span>
+                <span data-testid="hp-nam" className="text-rose-300">
+                  {displayTanks.nam.hp}
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-black/50 p-0.5">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-rose-500 to-pink-400 transition-all duration-300"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (displayTanks.nam.hp / MAX_HP) * 100))}%`,
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Center: Wind + Turn Badge + Resign icon */}
+            <div className="pointer-events-auto flex flex-col items-center gap-0.5 px-1">
+              <div className="flex items-center gap-1.5">
+                <span
+                  data-testid="wind"
+                  className="rounded-full border border-sky-300/40 bg-sky-500/25 px-2.5 py-0.5 text-[11px] font-extrabold text-sky-200 sm:text-xs"
+                >
+                  {windLabel(displayWind)}
+                </span>
+
+                {!showOver && (game.lastShot?.n ?? 0) > 0 && (
+                  <button
+                    type="button"
+                    data-testid="resign-btn"
+                    title="Đầu hàng"
+                    disabled={busy || !!activePlayback}
+                    onClick={giveUp}
+                    className="rounded-full border border-white/20 bg-white/10 px-2 py-0.5 text-[11px] text-zinc-200 hover:bg-white/25 disabled:opacity-40"
+                  >
+                    🏳️
+                  </button>
+                )}
+              </div>
+
+              <p
+                className="text-center text-[11px] font-semibold text-white/95 sm:text-xs"
+                role="status"
+              >
+                {!showOver ? (
+                  myTurn ? (
+                    <b className="inline-block animate-pulse text-amber-300">
+                      {hotseat ? `Lượt của ${NAME[me]}!` : "Lượt của em!"}
+                    </b>
+                  ) : (
+                    <span className="text-zinc-200">
+                      Đợi <b>{NAME[game.turn]}</b> bắn…
+                    </span>
+                  )
+                ) : game.winner ? (
+                  <b className="text-amber-300">
+                    {game.winner === me
+                      ? "Em thắng rồi! 🎉🎊"
+                      : `${NAME[game.winner]} thắng! 🎉`}
+                  </b>
+                ) : (
+                  <b className="text-amber-200">Hòa 🤝</b>
+                )}
+              </p>
+            </div>
+
+            {/* Linh HP */}
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-[11px] font-bold sm:text-xs">
+                <span data-testid="hp-linh" className="text-sky-300">
+                  {displayTanks.linh.hp}
+                </span>
+                <span className="truncate">Linh 🧸</span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-black/50 p-0.5">
+                <div
+                  className="ml-auto h-full rounded-full bg-gradient-to-l from-sky-500 to-cyan-300 transition-all duration-300"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (displayTanks.linh.hp / MAX_HP) * 100))}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Floating Toast Notification */}
+          {toast && (
+            <div className="mx-auto rounded-full border border-pink-300/50 bg-zinc-950/80 px-4 py-1 text-xs font-bold text-pink-300 shadow-lg backdrop-blur">
+              {toast}
+            </div>
+          )}
+        </div>
+
+        {/* CENTER GAME-OVER OVERLAY MODAL (inside the game window) */}
+        {showOver && (
+          <div className="pointer-events-auto relative z-20 mx-auto my-auto flex flex-col items-center gap-2.5 rounded-3xl border border-white/25 bg-zinc-950/80 px-7 py-5 text-center text-white shadow-2xl backdrop-blur-md">
+            <p className="text-xl font-extrabold text-amber-300 sm:text-2xl">
+              {game.winner
+                ? game.winner === me
                   ? "Em thắng rồi! 🎉🎊"
-                  : `${NAME[game.winner]} thắng! 🎉`}
-              </b>
-            ) : (
-              <b className="text-base">Hòa 🤝</b>
-            )}
-          </p>
-          {showOver && (
-            <p data-testid="end-reason" className="text-xs font-medium text-zinc-500">
+                  : `${NAME[game.winner]} thắng! 🎉`
+                : "Hòa 🤝"}
+            </p>
+            <p
+              data-testid="end-reason"
+              className="text-sm font-medium text-zinc-200"
+            >
               {endText(game)}
             </p>
-          )}
-        </div>
-      </div>
-
-      {/* Top bar: Nam HP, Wind, Linh HP */}
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-2xl border border-pink-200 bg-white/90 px-3 py-2 shadow-sm">
-        {/* Nam HP */}
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between text-xs font-semibold text-zinc-700 sm:text-sm">
-            <span>🐻 Nam</span>
-            <span data-testid="hp-nam" className="text-rose-600">
-              {displayTanks.nam.hp}
-            </span>
+            <button
+              type="button"
+              data-testid="new-game-btn"
+              disabled={busy}
+              onClick={startNewGame}
+              className="mt-1 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 px-6 py-2 text-sm font-bold text-white shadow-lg hover:brightness-110 active:scale-95 disabled:opacity-50"
+            >
+              Ván mới · {NAME[nextStarter]} đi trước
+            </button>
           </div>
-          <div className="h-2.5 w-full overflow-hidden rounded-full bg-zinc-100">
-            <div
-              className="h-full rounded-full bg-rose-500 transition-all duration-300"
-              style={{
-                width: `${Math.max(0, Math.min(100, (displayTanks.nam.hp / MAX_HP) * 100))}%`,
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Wind indicator */}
-        <div
-          data-testid="wind"
-          className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-center text-xs font-bold text-sky-700 sm:text-sm"
-        >
-          {windLabel(displayWind)}
-        </div>
-
-        {/* Linh HP */}
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between text-xs font-semibold text-zinc-700 sm:text-sm">
-            <span data-testid="hp-linh" className="text-sky-600">
-              {displayTanks.linh.hp}
-            </span>
-            <span>Linh 🧸</span>
-          </div>
-          <div className="h-2.5 w-full overflow-hidden rounded-full bg-zinc-100">
-            <div
-              className="ml-auto h-full rounded-full bg-sky-500 transition-all duration-300"
-              style={{
-                width: `${Math.max(0, Math.min(100, (displayTanks.linh.hp / MAX_HP) * 100))}%`,
-              }}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Battlefield Canvas */}
-      <Field
-        state={game}
-        aim={aim}
-        actualX={actualX}
-        myTurn={myTurn}
-        playable={playable}
-        activePlayback={activePlayback}
-        finishedShotN={finishedShotN}
-        onPlaybackDone={handlePlaybackDone}
-        onDragAim={handleDragAim}
-      />
-
-      {/* Controls */}
-      <Controls
-        ground={displayGround}
-        myTank={myTank}
-        aim={aim}
-        fuelLeft={fuelLeft}
-        playable={playable}
-        onChangeAim={setAim}
-        onSpendFuel={handleSpendFuel}
-        onFire={handleFire}
-      />
-
-      {/* Footer: toast / hints / resign / new game */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500 sm:text-sm">
-        <span className="min-h-5">
-          {toast ? (
-            <b className="text-pink-500">{toast}</b>
-          ) : !showOver ? (
-            "Phím ← → lái · ↑ ↓ chỉnh góc · 1/2/3 chọn đạn · Giữ Space để bắn"
-          ) : (
-            endText(game)
-          )}
-        </span>
-
-        {!showOver && (game.lastShot?.n ?? 0) > 0 && (
-          <button
-            type="button"
-            data-testid="resign-btn"
-            disabled={busy || !!activePlayback}
-            onClick={giveUp}
-            className="text-zinc-500 underline hover:text-zinc-700 disabled:opacity-45"
-          >
-            🏳️ Đầu hàng
-          </button>
         )}
 
-        {showOver && (
-          <button
-            type="button"
-            data-testid="new-game-btn"
-            disabled={busy}
-            onClick={startNewGame}
-            className="rounded-full bg-rose-500 px-5 py-1.5 font-semibold text-white shadow hover:bg-rose-600 disabled:opacity-60"
-          >
-            Ván mới · {NAME[nextStarter]} đi trước
-          </button>
-        )}
+        {/* BOTTOM HUD OVERLAY (Controls inside the game window) */}
+        <div className="pointer-events-none relative z-10 p-2 sm:p-3">
+          <Controls
+            ground={displayGround}
+            myTank={myTank}
+            aim={aim}
+            fuelLeft={fuelLeft}
+            playable={playable}
+            onChangeAim={setAim}
+            onSpendFuel={handleSpendFuel}
+            onFire={handleFire}
+          />
+        </div>
       </div>
     </main>
   );
