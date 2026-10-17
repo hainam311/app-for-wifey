@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export type Who = "nam" | "linh";
 
 export const WHO_COOKIE = "app_wifey_who";
-export const WHO_MAX_AGE = 60 * 60 * 24 * 7; // stay unlocked ~7 days on this browser
+export const WHO_MAX_AGE = 60 * 60 * 24 * 180; // stay unlocked ~180 days on this device
 
 const PASSCODES: Record<Who, string | undefined> = {
   nam: process.env.NAM_PASSCODE,
