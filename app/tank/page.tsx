@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { onSnapshot, runTransaction } from "firebase/firestore";
+import { authReady, db } from "@/lib/firebase";
+import { useMe } from "@/lib/useMe";
+import { gameRef } from "@/lib/tank/gameDoc";
 import Field, { type ShotPlayback } from "./Field";
 import Controls from "./Controls";
 import {
@@ -14,10 +19,18 @@ import {
   resign,
   type Aim,
   type Player,
+  type StateResult,
   type TankState,
 } from "@/lib/tank/engine";
 
-const FIRST_EVER_STARTER: Player = "linh";
+// One shared artillery game in tank_game/shared. Every action runs inside a
+// Firestore transaction against the latest document; the shooter's browser
+// simulates the shot and writes the resulting state + trajectory so both
+// screens replay the exact same outcome.
+const FIRST_EVER_STARTER: Player = "linh"; // ladies first 💕
+
+class GameRuleError extends Error {}
+
 const NAME: Record<Player, string> = { nam: "🐻 Nam", linh: "🧸 Linh" };
 
 function defaultAimFor(state: TankState, who: Player): Aim {
@@ -33,7 +46,7 @@ function defaultAimFor(state: TankState, who: Player): Aim {
 
 function windLabel(wind: number): string {
   if (wind === 0) return "Gió 0 ·";
-  return wind > 0 ? `Gió → ${wind}` : `Gió ← ${Math.abs(wind)}`;
+  return wind > 0 ? `→ ${wind}` : `← ${Math.abs(wind)}`;
 }
 
 function endText(game: TankState): string {
@@ -51,27 +64,73 @@ function endText(game: TankState): string {
   }
 }
 
-export default function TankPage() {
-  const [game, setGame] = useState<TankState>(() => newGame(FIRST_EVER_STARTER));
+const Title = () => (
+  <h1 className="text-xl font-bold text-zinc-800 sm:text-2xl">Bắn tăng 💥</h1>
+);
 
-  return <TankGame key={game.gameId} game={game} onUpdateGame={setGame} />;
+export default function TankPage() {
+  const me = useMe();
+  const [game, setGame] = useState<TankState | null>(null);
+
+  useEffect(() => {
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+    authReady.then(() => {
+      if (cancelled) return;
+      unsub = onSnapshot(gameRef, (snap) => {
+        if (snap.exists()) {
+          setGame(snap.data() as TankState);
+        } else {
+          runTransaction(db, async (tx) => {
+            if (!(await tx.get(gameRef)).exists()) {
+              tx.set(gameRef, newGame(FIRST_EVER_STARTER));
+            }
+          }).catch((err) => console.error("Could not create tank game:", err));
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, []);
+
+  if (me === null) {
+    return (
+      <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10 text-center">
+        <Title />
+        <Link href="/lock?next=/tank" className="py-12 text-rose-500 underline">
+          Chưa biết máy của ai 🤔 Mở khoá lại nhé
+        </Link>
+      </main>
+    );
+  }
+
+  if (!game || me === undefined) {
+    return (
+      <main className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10 text-center">
+        <Title />
+        <p className="py-12 text-center text-gray-400">Đang tải...</p>
+      </main>
+    );
+  }
+
+  // Keyed on gameId (not lastShot.n) so the canvas persists across turns and
+  // animations smoothly transition from the previous turn's terrain/HP.
+  return <TankGame key={game.gameId} game={game} me={me} />;
 }
 
-function TankGame({
-  game,
-  onUpdateGame,
-}: {
-  game: TankState;
-  onUpdateGame: (next: TankState) => void;
-}) {
-  const activePlayer = game.turn;
-  const [aim, setAim] = useState<Aim>(() => defaultAimFor(game, activePlayer));
+function TankGame({ game, me }: { game: TankState; me: Player }) {
+  const [aim, setAim] = useState<Aim>(() => defaultAimFor(game, me));
   const [toast, setToast] = useState("");
+  const [busy, setBusy] = useState(false);
   const [queue, setQueue] = useState<ShotPlayback[]>([]);
   const [finishedShotN, setFinishedShotN] = useState<number>(
     () => game.lastShot?.n ?? 0
   );
 
+  const prevStateRef = useRef<TankState>(game);
+  const seenShotNRef = useRef<number>(game.lastShot?.n ?? 0);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
@@ -81,43 +140,78 @@ function TankGame({
     toastTimer.current = setTimeout(() => setToast(""), 2500);
   }, []);
 
+  // Enqueue shot animation whenever lastShot.n advances on a snapshot
+  useEffect(() => {
+    const shot = game.lastShot;
+    const prev = prevStateRef.current;
+    if (shot && shot.n > seenShotNRef.current) {
+      seenShotNRef.current = shot.n;
+      setQueue((q) => [
+        ...q,
+        {
+          shot,
+          preGround: prev.ground,
+          preTanks: prev.tanks,
+          postGround: game.ground,
+          postTanks: game.tanks,
+        },
+      ]);
+      setAim(defaultAimFor(game, me));
+    }
+    prevStateRef.current = game;
+  }, [game, me]);
+
   const activePlayback = queue[0] ?? null;
 
-  // Displayed HP & wind hold pre-impact values while an animation is playing
+  // Hold pre-impact terrain, HP, and wind while an animation is playing
   const displayTanks = activePlayback ? activePlayback.preTanks : game.tanks;
   const displayGround = activePlayback ? activePlayback.preGround : game.ground;
   const displayWind = activePlayback ? activePlayback.shot.wind : game.wind;
-  const playing = game.status === "playing" && !activePlayback;
-  const playable = playing;
 
-  const myTank = displayTanks[activePlayer];
+  const showOver = game.status === "over" && !activePlayback;
+  const playing = game.status === "playing" && !activePlayback;
+  const myTurn = playing && game.turn === me;
+  const playable = myTurn && !busy;
+
+  const myTank = displayTanks[me];
   const actualX = drive(displayGround, myTank.x, aim.toX, MAX_FUEL);
+
+  const run = useCallback(
+    async (move: (state: TankState) => StateResult) => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await runTransaction(db, async (tx) => {
+          const snap = await tx.get(gameRef);
+          if (!snap.exists()) {
+            throw new GameRuleError(
+              "Ván này không còn nữa, tải lại trang nhé 🔄"
+            );
+          }
+          const result = move(snap.data() as TankState);
+          if (!result.ok) throw new GameRuleError(result.reason);
+          tx.set(gameRef, result.state);
+        });
+      } catch (err) {
+        if (err instanceof GameRuleError) say(err.message);
+        else {
+          console.error("Tank action failed:", err);
+          say("Có lỗi gì đó, thử lại nhé 🥺");
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, say]
+  );
 
   const handleFire = useCallback(
     (power: number) => {
       if (!playable) return;
-      const res = fire(game, activePlayer, { ...aim, power });
-      if (!res.ok) {
-        say(res.reason);
-        return;
-      }
-      const next = res.state;
-      if (next.lastShot) {
-        setQueue((q) => [
-          ...q,
-          {
-            shot: next.lastShot!,
-            preGround: game.ground,
-            preTanks: game.tanks,
-            postGround: next.ground,
-            postTanks: next.tanks,
-          },
-        ]);
-      }
-      onUpdateGame(next);
-      setAim(defaultAimFor(next, next.turn));
+      const shotAim: Aim = { ...aim, power };
+      run((s) => fire(s, me, shotAim, Math.random));
     },
-    [activePlayer, aim, game, onUpdateGame, playable, say]
+    [aim, me, playable, run]
   );
 
   const handlePlaybackDone = useCallback((shotN: number) => {
@@ -129,40 +223,54 @@ function TankGame({
     setAim((prev) => ({ ...prev, angle, facing }));
   }, []);
 
-  const handleResign = () => {
+  const giveUp = () => {
     if (!window.confirm("Đầu hàng ván này hả? 🏳️")) return;
-    const res = resign(game, activePlayer);
-    if (!res.ok) return say(res.reason);
-    onUpdateGame(res.state);
+    run((s) => resign(s, me));
   };
 
-  const handleNewGame = () => {
-    onUpdateGame(nextGame(game));
-  };
+  // Both players may press "Ván mới" at once: only the first transaction wins.
+  const startNewGame = () =>
+    run((s) =>
+      s.status === "over" && s.gameId === game.gameId
+        ? { ok: true, state: nextGame(s) }
+        : { ok: false, reason: "Ván mới bắt đầu rồi nè 🎉" }
+    );
 
   const nextStarter = other(game.startedBy);
-  const showOver = game.status === "over" && !activePlayback;
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-2.5 px-3 py-4 sm:px-4 sm:py-6">
       <div className="flex flex-wrap items-center justify-between gap-2 pl-11 sm:pl-0">
-        <h1 className="text-xl font-bold text-zinc-800 sm:text-2xl">
-          Bắn tăng 💥
-        </h1>
+        <Title />
 
-        <p className="text-sm font-medium text-zinc-700" role="status">
-          {!showOver ? (
-            <b className="inline-block animate-pulse text-rose-500">
-              Lượt của {NAME[activePlayer]}!
-            </b>
-          ) : game.winner ? (
-            <b className="inline-block animate-bounce text-base text-rose-500">
-              {NAME[game.winner]} thắng! 🎉
-            </b>
-          ) : (
-            <b className="text-base">Hòa 🤝</b>
+        <div className="flex flex-col items-end">
+          <p className="text-sm font-medium text-zinc-700" role="status">
+            {!showOver ? (
+              myTurn ? (
+                <b className="inline-block animate-pulse text-rose-500">
+                  Lượt của em!
+                </b>
+              ) : (
+                <>
+                  Đợi <b>{NAME[game.turn]}</b> bắn…
+                </>
+              )
+            ) : game.winner ? (
+              <b className="inline-block animate-bounce text-base text-rose-500">
+                {game.winner === me
+                  ? "Em thắng rồi! 🎉🎊"
+                  : `${NAME[game.winner]} thắng! 🎉`}
+              </b>
+            ) : (
+              <b className="text-base">Hòa 🤝</b>
+            )}
+          </p>
+          {showOver && (
+            <p data-testid="end-reason" className="text-xs font-medium text-zinc-500">
+              {endText(game)}
+            </p>
           )}
-        </p>
+        </div>
       </div>
 
       {/* Top bar: Nam HP, Wind, Linh HP */}
@@ -235,23 +343,25 @@ function TankGame({
         onFire={handleFire}
       />
 
-      {/* Footer status / toast / resign / new game */}
+      {/* Footer: toast / hints / resign / new game */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500 sm:text-sm">
         <span className="min-h-5">
           {toast ? (
             <b className="text-pink-500">{toast}</b>
-          ) : showOver ? (
-            <b className="text-zinc-700">{endText(game)}</b>
-          ) : (
+          ) : !showOver ? (
             "Phím ← → lái · ↑ ↓ chỉnh góc · 1/2/3 chọn đạn · Giữ Space để bắn"
+          ) : (
+            endText(game)
           )}
         </span>
 
         {!showOver && (game.lastShot?.n ?? 0) > 0 && (
           <button
             type="button"
-            onClick={handleResign}
-            className="text-zinc-500 underline hover:text-zinc-700"
+            data-testid="resign-btn"
+            disabled={busy || !!activePlayback}
+            onClick={giveUp}
+            className="text-zinc-500 underline hover:text-zinc-700 disabled:opacity-45"
           >
             🏳️ Đầu hàng
           </button>
@@ -260,8 +370,10 @@ function TankGame({
         {showOver && (
           <button
             type="button"
-            onClick={handleNewGame}
-            className="rounded-full bg-rose-500 px-5 py-1.5 font-semibold text-white shadow hover:bg-rose-600"
+            data-testid="new-game-btn"
+            disabled={busy}
+            onClick={startNewGame}
+            className="rounded-full bg-rose-500 px-5 py-1.5 font-semibold text-white shadow hover:bg-rose-600 disabled:opacity-60"
           >
             Ván mới · {NAME[nextStarter]} đi trước
           </button>

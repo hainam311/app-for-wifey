@@ -561,6 +561,7 @@ export default function Field({
         aria-label="Chiến trường"
         data-testid="field"
         data-shot-n={finishedShotN}
+        data-animating-shot-n={activePlayback?.shot.n ?? 0}
         onPointerDown={(e) => {
           if (!playable || activePlayback) return;
           draggingRef.current = true;
