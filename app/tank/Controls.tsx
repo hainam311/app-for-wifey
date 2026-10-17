@@ -15,9 +15,10 @@ type Props = {
   ground: readonly number[];
   myTank: Tank;
   aim: Aim;
-  actualX: number;
+  fuelLeft: number;
   playable: boolean;
   onChangeAim: (updater: (prev: Aim) => Aim) => void;
+  onSpendFuel: (spent: number) => void;
   onFire: (power: number) => void;
 };
 
@@ -25,9 +26,10 @@ export default function Controls({
   ground,
   myTank,
   aim,
-  actualX,
+  fuelLeft,
   playable,
   onChangeAim,
+  onSpendFuel,
   onFire,
 }: Props) {
   const [charging, setCharging] = useState(false);
@@ -35,33 +37,44 @@ export default function Controls({
   const chargeRafRef = useRef<number>(0);
   const currentPowerRef = useRef<number>(aim.power);
   const manualPowerRef = useRef<boolean>(false);
+  const fuelLeftRef = useRef<number>(fuelLeft);
 
   useEffect(() => {
     currentPowerRef.current = aim.power;
   }, [aim.power]);
 
-  const fuelUsed = Math.min(MAX_FUEL, Math.abs(actualX - myTank.x));
-  const fuelLeft = Math.max(0, MAX_FUEL - fuelUsed);
+  useEffect(() => {
+    fuelLeftRef.current = fuelLeft;
+  }, [fuelLeft]);
+
   const ssReady = myTank.shotsSinceSS >= SS_CHARGE;
 
   const stepDrive = useCallback(
     (dir: 1 | -1, step = 6) => {
       if (!playable) return;
+      const avail = fuelLeftRef.current;
+      if (avail <= 0) {
+        // Out of fuel: can still turn facing in place, cannot move x
+        onChangeAim((prev) => ({ ...prev, facing: dir }));
+        return;
+      }
+      const allowStep = Math.min(step, avail);
       onChangeAim((prev) => {
-        const curX = drive(ground, myTank.x, prev.toX, MAX_FUEL);
-        const candidateToX = curX + dir * step;
-        const clampedToX =
-          Math.abs(candidateToX - myTank.x) <= MAX_FUEL
-            ? drive(ground, myTank.x, candidateToX, MAX_FUEL)
-            : curX;
+        const curX = prev.toX;
+        const nextX = drive(ground, curX, curX + dir * allowStep, allowStep);
+        const spent = Math.abs(nextX - curX);
+        if (spent > 0) {
+          fuelLeftRef.current = Math.max(0, fuelLeftRef.current - spent);
+          onSpendFuel(spent);
+        }
         return {
           ...prev,
           facing: dir,
-          toX: clampedToX,
+          toX: nextX,
         };
       });
     },
-    [ground, myTank.x, onChangeAim, playable]
+    [ground, onChangeAim, onSpendFuel, playable]
   );
 
   const stepAngle = useCallback(

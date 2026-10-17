@@ -25,6 +25,7 @@ export type ShotPlayback = {
   preTanks: { nam: Tank; linh: Tank };
   postGround: number[];
   postTanks: { nam: Tank; linh: Tank };
+  skipDrive?: boolean;
 };
 
 type DamageFloat = {
@@ -39,6 +40,7 @@ type Props = {
   state: TankState;
   aim: Aim;
   actualX: number; // shooter tank x after local drive
+  myTurn: boolean;
   playable: boolean;
   activePlayback: ShotPlayback | null;
   finishedShotN: number;
@@ -50,6 +52,7 @@ export default function Field({
   state,
   aim,
   actualX,
+  myTurn,
   playable,
   activePlayback,
   finishedShotN,
@@ -65,6 +68,7 @@ export default function Field({
     state,
     aim,
     actualX,
+    myTurn,
     playable,
     activePlayback,
     onPlaybackDone,
@@ -74,6 +78,7 @@ export default function Field({
       state,
       aim,
       actualX,
+      myTurn,
       playable,
       activePlayback,
       onPlaybackDone,
@@ -96,6 +101,7 @@ export default function Field({
         state: curState,
         aim: curAim,
         actualX: curActualX,
+        myTurn: isMyTurn,
         playable: isPlayable,
         activePlayback: pb,
         onPlaybackDone: doneCb,
@@ -140,8 +146,9 @@ export default function Field({
         }
         const shot = pb.shot;
         const startX = pb.preTanks[shot.by].x;
-        const driveDist = Math.abs(shot.fromX - startX);
-        const driveMs = driveDist > 0 ? Math.min(500, Math.max(180, driveDist * 4)) : 40;
+        const driveDist = pb.skipDrive ? 0 : Math.abs(shot.fromX - startX);
+        const driveMs =
+          driveDist > 0 ? Math.min(500, Math.max(180, driveDist * 4)) : 0;
         const numPoints = Math.floor(shot.path.length / 2);
         // Path saves every 2nd physics step (1/30s per point). Play slightly briskly (~45 pts/s).
         const flightMs = Math.max(160, (numPoints / 45) * 1000);
@@ -244,7 +251,8 @@ export default function Field({
       } else {
         currentShotN = null;
         // Apply live local drive + angle on the active player's screen
-        if (isPlayable && curState.status === "playing") {
+        // (use isMyTurn so the tank does not snap back while the shot transaction is in flight)
+        if (isMyTurn && curState.status === "playing") {
           const active = curState.turn;
           drawTanks[active] = {
             ...drawTanks[active],

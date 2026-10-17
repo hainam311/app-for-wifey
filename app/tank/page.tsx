@@ -71,6 +71,10 @@ const Title = () => (
 export default function TankPage() {
   const me = useMe();
   const [game, setGame] = useState<TankState | null>(null);
+  const [hotseat] = useState<boolean>(() =>
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("hotseat") === "1"
+  );
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
@@ -117,11 +121,27 @@ export default function TankPage() {
 
   // Keyed on gameId (not lastShot.n) so the canvas persists across turns and
   // animations smoothly transition from the previous turn's terrain/HP.
-  return <TankGame key={game.gameId} game={game} me={me} />;
+  return (
+    <TankGame
+      key={game.gameId}
+      game={game}
+      me={hotseat ? game.turn : me}
+      hotseat={hotseat}
+    />
+  );
 }
 
-function TankGame({ game, me }: { game: TankState; me: Player }) {
+function TankGame({
+  game,
+  me,
+  hotseat = false,
+}: {
+  game: TankState;
+  me: Player;
+  hotseat?: boolean;
+}) {
   const [aim, setAim] = useState<Aim>(() => defaultAimFor(game, me));
+  const [fuelLeft, setFuelLeft] = useState<number>(MAX_FUEL);
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
   const [queue, setQueue] = useState<ShotPlayback[]>([]);
@@ -146,6 +166,9 @@ function TankGame({ game, me }: { game: TankState; me: Player }) {
     const prev = prevStateRef.current;
     if (shot && shot.n > seenShotNRef.current) {
       seenShotNRef.current = shot.n;
+      // On the shooter's own screen (or in hotseat mode), the tank was already
+      // driven locally to shot.fromX before firing, so don't jump back and re-drive.
+      const skipDrive = hotseat || shot.by === me;
       setQueue((q) => [
         ...q,
         {
@@ -154,12 +177,14 @@ function TankGame({ game, me }: { game: TankState; me: Player }) {
           preTanks: prev.tanks,
           postGround: game.ground,
           postTanks: game.tanks,
+          skipDrive,
         },
       ]);
       setAim(defaultAimFor(game, me));
+      setFuelLeft(MAX_FUEL);
     }
     prevStateRef.current = game;
-  }, [game, me]);
+  }, [game, hotseat, me]);
 
   const activePlayback = queue[0] ?? null;
 
@@ -175,6 +200,10 @@ function TankGame({ game, me }: { game: TankState; me: Player }) {
 
   const myTank = displayTanks[me];
   const actualX = drive(displayGround, myTank.x, aim.toX, MAX_FUEL);
+
+  const handleSpendFuel = useCallback((spent: number) => {
+    setFuelLeft((prev) => Math.max(0, prev - spent));
+  }, []);
 
   const run = useCallback(
     async (move: (state: TankState) => StateResult) => {
@@ -248,7 +277,7 @@ function TankGame({ game, me }: { game: TankState; me: Player }) {
             {!showOver ? (
               myTurn ? (
                 <b className="inline-block animate-pulse text-rose-500">
-                  Lượt của em!
+                  {hotseat ? `Lượt của ${NAME[me]}!` : "Lượt của em!"}
                 </b>
               ) : (
                 <>
@@ -325,6 +354,7 @@ function TankGame({ game, me }: { game: TankState; me: Player }) {
         state={game}
         aim={aim}
         actualX={actualX}
+        myTurn={myTurn}
         playable={playable}
         activePlayback={activePlayback}
         finishedShotN={finishedShotN}
@@ -337,9 +367,10 @@ function TankGame({ game, me }: { game: TankState; me: Player }) {
         ground={displayGround}
         myTank={myTank}
         aim={aim}
-        actualX={actualX}
+        fuelLeft={fuelLeft}
         playable={playable}
         onChangeAim={setAim}
+        onSpendFuel={handleSpendFuel}
         onFire={handleFire}
       />
 
