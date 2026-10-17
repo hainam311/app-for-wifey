@@ -4,12 +4,21 @@ import { useEffect, useRef } from "react";
 import {
   COLS,
   COL_W,
+  TANK_OFFSET_Y,
   TANK_R,
   WORLD_H,
   WORLD_W,
   groundAt,
   tankY,
 } from "@/lib/tank/terrain";
+import {
+  MOTION,
+  kick,
+  newBody,
+  smoothGround,
+  stepBody,
+  type MotionBody,
+} from "@/lib/tank/motion";
 import {
   DEFAULT_MOBILE,
   MAX_HP,
@@ -46,6 +55,17 @@ type DebrisParticle = {
   vy: number;
   r: number;
   color: string;
+  bornAt: number;
+  lifeMs: number;
+};
+
+type TrailParticle = {
+  kind: "dust" | "smoke" | "sparkle";
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  r: number;
   bornAt: number;
   lifeMs: number;
 };
@@ -134,6 +154,10 @@ export default function Field({
   const floatsRef = useRef<DamageFloat[]>([]);
   const debrisRef = useRef<DebrisParticle[]>([]);
   const motesRef = useRef<WindMote[]>([]);
+  // Local visual motion of each mobile (lib/tank/motion.ts) and its trail
+  const bodiesRef = useRef<Partial<Record<Player, MotionBody>>>({});
+  const trailRef = useRef<TrailParticle[]>([]);
+  const trailDistRef = useRef<Record<Player, number>>({ nam: 0, linh: 0 });
   const spritesRef = useRef<Partial<Record<MobileId, HTMLImageElement>>>({});
   const draggingRef = useRef(false);
 
@@ -191,6 +215,8 @@ export default function Field({
     let currentShotN: number | null = null;
     let completedShotN: number | null = null;
     let spawnedDebrisForN: number | null = null;
+    let recoilForN: number | null = null;
+    let hitForN: number | null = null;
     let lastFrameTime = performance.now();
     let cloudOffset = 0;
 
@@ -276,8 +302,9 @@ export default function Field({
         };
 
         if (elapsed < driveMs) {
-          const t = driveMs > 0 ? elapsed / driveMs : 1;
-          const interpX = Math.round(startX + (shot.fromX - startX) * t);
+          const lin = driveMs > 0 ? elapsed / driveMs : 1;
+          const t = lin * lin * (3 - 2 * lin); // ease in & out: speed up, then brake
+          const interpX = startX + (shot.fromX - startX) * t;
           drawTanks[shot.by] = {
             ...drawTanks[shot.by],
             x: interpX,
@@ -314,6 +341,20 @@ export default function Field({
           };
           shellTrail = shot.path.slice(0, (i0 + 1) * 2);
 
+          // Recoil kick on the shooter once, at the start of the flight
+          if (recoilForN !== shot.n) {
+            recoilForN = shot.n;
+            const body = bodiesRef.current[shot.by];
+            if (body) {
+              const strength = shot.kind === "ss" ? 1.6 : shot.kind === "s2" ? 1.2 : 1;
+              const facing = drawTanks[shot.by].facing;
+              kick(body, {
+                recoil: -facing * 110 * strength,
+                rotv: -facing * 2.2 * strength,
+              });
+            }
+          }
+
           // Muzzle flash during first 110ms of flight
           if (fElapsed < 110) {
             const rad = (shot.angle * Math.PI) / 180;
@@ -334,6 +375,22 @@ export default function Field({
               nam: { ...pb.postTanks.nam },
               linh: { ...pb.postTanks.linh },
             };
+            // Knock the damaged mobiles away from the explosion, once
+            if (hitForN !== shot.n && shot.boom) {
+              hitForN = shot.n;
+              for (const hp of ["nam", "linh"] as const) {
+                const dmg = shot.damage[hp];
+                const body = bodiesRef.current[hp];
+                if (dmg <= 0 || !body) continue;
+                const away = Math.sign(body.x - shot.boom.x) || 1;
+                const power = Math.min(1.6, dmg / 250);
+                kick(body, {
+                  liftv: 160 * power,
+                  rotv: away * 4 * power,
+                  recoil: away * 90 * power,
+                });
+              }
+            }
           } else {
             drawTanks[shot.by] = {
               ...drawTanks[shot.by],
@@ -550,13 +607,12 @@ export default function Field({
       // Deep earth body
       ctx.beginPath();
       ctx.moveTo(0, canvas.height);
+      // Smooth surface through the column centers (same as the mobiles' contact)
+      ctx.lineTo(wx(0), wy(drawGround[0] ?? 0));
       for (let i = 0; i < COLS; i++) {
-        const x0 = i * COL_W;
-        const x1 = (i + 1) * COL_W;
-        const h = drawGround[i] ?? 0;
-        ctx.lineTo(wx(x0), wy(h));
-        ctx.lineTo(wx(x1), wy(h));
+        ctx.lineTo(wx(i * COL_W + COL_W / 2), wy(drawGround[i] ?? 0));
       }
+      ctx.lineTo(wx(WORLD_W), wy(drawGround[COLS - 1] ?? 0));
       ctx.lineTo(canvas.width, canvas.height);
       ctx.closePath();
 
@@ -612,17 +668,158 @@ export default function Field({
       }
       ctx.stroke();
 
+      // --- 3a. Movement trails (dust, exhaust smoke, sparkles) behind the mobiles ---
+      const liveTrail: TrailParticle[] = [];
+      for (const q of trailRef.current) {
+        const age = now - q.bornAt;
+        if (age >= q.lifeMs) continue;
+        liveTrail.push(q);
+        q.x += q.vx * dt;
+        q.y += q.vy * dt;
+        q.vx *= Math.exp(-dt * 2.5);
+        const k = age / q.lifeMs;
+        ctx.save();
+        if (q.kind === "sparkle") {
+          ctx.globalAlpha = (1 - k) * (0.6 + 0.4 * Math.sin(age * 0.03));
+          ctx.fillStyle = "#fff7fb";
+          const r = q.r * (1 - k * 0.5) * unit;
+          const px = wx(q.x);
+          const py = wy(q.y);
+          ctx.beginPath();
+          ctx.moveTo(px, py - r * 2);
+          ctx.lineTo(px + r * 0.6, py);
+          ctx.lineTo(px, py + r * 2);
+          ctx.lineTo(px - r * 0.6, py);
+          ctx.closePath();
+          ctx.moveTo(px - r * 2, py);
+          ctx.lineTo(px, py + r * 0.6);
+          ctx.lineTo(px + r * 2, py);
+          ctx.lineTo(px, py - r * 0.6);
+          ctx.closePath();
+          ctx.fill();
+        } else {
+          ctx.globalAlpha = (1 - k) * (q.kind === "smoke" ? 0.45 : 0.55);
+          ctx.fillStyle = q.kind === "smoke" ? "#e4e4e7" : theme.topsoil;
+          ctx.beginPath();
+          ctx.arc(wx(q.x), wy(q.y), q.r * (1 + k * 1.4) * unit, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+      trailRef.current = liveTrail;
+
+      const spawnTrail = (
+        kind: TrailParticle["kind"],
+        x: number,
+        y: number,
+        back: number
+      ) => {
+        const r = Math.random;
+        if (kind === "dust") {
+          trailRef.current.push({
+            kind, x: x + (r() - 0.5) * 6, y: y + 2,
+            vx: back * (20 + r() * 30), vy: 18 + r() * 24,
+            r: 2.6 + r() * 2.2, bornAt: now, lifeMs: 450 + r() * 300,
+          });
+        } else if (kind === "smoke") {
+          trailRef.current.push({
+            kind, x, y,
+            vx: back * (8 + r() * 10), vy: 22 + r() * 16,
+            r: 3 + r() * 1.5, bornAt: now, lifeMs: 800 + r() * 400,
+          });
+        } else {
+          trailRef.current.push({
+            kind, x: x + (r() - 0.5) * 26, y: y + r() * 22,
+            vx: back * (10 + r() * 15), vy: -6 + r() * 18,
+            r: 1.6 + r() * 1.2, bornAt: now, lifeMs: 500 + r() * 300,
+          });
+        }
+      };
+
       // --- 3. Chibi GunBound-style Tanks ---
+      const smoothFn = smoothGround(drawGround);
       for (const p of ["nam", "linh"] as const) {
         const t = drawTanks[p];
         if (!t.alive && t.hp <= 0 && groundAt(drawGround, t.x) <= 0) {
           continue;
         }
-        const tx = t.x;
-        const ty = tankY(drawGround, tx);
+        const mobileId: MobileId = t.mobile ?? DEFAULT_MOBILE[p];
+        const prof = MOTION[mobileId];
+
+        // Procedural motion: the body follows the engine x with inertia, suspension and a gait
+        const groundFn = smoothFn;
+        let body = bodiesRef.current[p];
+        if (!body) {
+          body = newBody(t.x, groundFn, p === "nam" ? 0 : 2.1, prof.foot);
+          bodiesRef.current[p] = body;
+        }
+        const pose = stepBody(
+          body,
+          { x: t.x, groundAt: groundFn, alive: t.alive },
+          prof,
+          dt,
+          now / 1000
+        );
+        const liftPx = pose.lift * scaleY;
+
+        const tx = pose.x;
+        const ty = pose.ground + TANK_OFFSET_Y;
         const cx = wx(tx);
         const cy = wy(ty);
         const isNam = p === "nam";
+
+        // Trails while moving, a dust puff on each hop landing, idle exhaust
+        if (t.alive) {
+          const back = -Math.sign(body.vx) || -t.facing;
+          if (pose.moving > 0.3) {
+            trailDistRef.current[p] += pose.speed * dt;
+            const floaty = prof.gait === "hover" || prof.gait === "float";
+            // More dust when a walker works hard uphill
+            const every = floaty ? 9 : pose.grade > 0.25 ? 3.5 : 6;
+            while (trailDistRef.current[p] >= every) {
+              trailDistRef.current[p] -= every;
+              for (const kind of prof.trails) {
+                if (kind === "smoke") {
+                  spawnTrail(kind, tx - t.facing * 16, pose.ground + 34, back);
+                } else if (kind === "sparkle") {
+                  spawnTrail(kind, tx + back * 10, pose.ground + pose.lift, back);
+                } else {
+                  spawnTrail(kind, tx + back * 12, pose.ground, back);
+                }
+              }
+            }
+          }
+          if (pose.contact) {
+            for (let k = 0; k < 4; k++) spawnTrail("dust", tx, pose.ground, k % 2 ? 1 : -1);
+          }
+          if (prof.trails.includes("smoke") && Math.random() < dt * 1.2) {
+            spawnTrail("smoke", tx - t.facing * 16, pose.ground + 34, -t.facing);
+          }
+        }
+
+        // Soft ground shadow (shrinks as the mobile rises), glow under hovers
+        {
+          const up = Math.max(0, pose.lift);
+          const k = Math.max(0.35, 1 - up / 45);
+          ctx.save();
+          ctx.globalAlpha = 0.28 * k;
+          ctx.fillStyle = "#0a0a0a";
+          ctx.beginPath();
+          ctx.ellipse(wx(tx), wy(pose.ground), 24 * k * unit, 4.5 * k * unit, 0, 0, Math.PI * 2);
+          ctx.fill();
+          if (t.alive && prof.gait === "hover") {
+            const glowR = (20 + Math.sin(now * 0.008) * 3) * unit;
+            const glow = ctx.createRadialGradient(cx, wy(pose.ground + 2), 1, cx, wy(pose.ground + 2), glowR);
+            glow.addColorStop(0, "rgba(125, 211, 252, 0.65)");
+            glow.addColorStop(1, "rgba(125, 211, 252, 0)");
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = glow;
+            ctx.beginPath();
+            ctx.arc(cx, wy(pose.ground + 2), glowR, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          ctx.restore();
+        }
 
         const bodyColor = !t.alive
           ? "#71717a"
@@ -710,15 +907,9 @@ export default function Field({
           ctx.restore();
         }
 
-        // Calculate terrain slope under treads for natural tank tilt
-        const hL = groundAt(drawGround, tx - 8);
-        const hR = groundAt(drawGround, tx + 8);
-        const tilt = Math.max(
-          -0.38,
-          Math.min(0.38, Math.atan2(hL - hR, 16))
-        );
+        // Body rotation = slope + pitch + lean + waddle (from the motion pose)
+        const tilt = pose.rot;
 
-        const mobileId: MobileId = t.mobile ?? DEFAULT_MOBILE[p];
         const spriteImg = spritesRef.current[mobileId];
         const hasSprite =
           spriteImg && spriteImg.complete && spriteImg.naturalWidth > 0;
@@ -726,9 +917,10 @@ export default function Field({
         if (hasSprite) {
           ctx.save();
           // Anchor at bottom of treads on terrain surface
-          ctx.translate(cx, cy + TANK_R * scaleY);
+          ctx.translate(cx, cy + TANK_R * scaleY - liftPx);
           ctx.rotate(tilt);
-          ctx.scale(t.facing, 1);
+          // Squash & stretch stays uniform at rest (sx = sy = 1): no distortion
+          ctx.scale(t.facing * pose.sx, pose.sy);
           if (!t.alive) {
             ctx.filter = "grayscale(100%) brightness(65%)";
           }
@@ -749,16 +941,16 @@ export default function Field({
           ctx.lineWidth = Math.max(3, 6 * unit);
           ctx.lineCap = "round";
           ctx.beginPath();
-          ctx.moveTo(cx, cy - 3 * unit);
+          ctx.moveTo(cx, cy - 3 * unit - liftPx);
           ctx.lineTo(
             cx + dirX * (TANK_R + 11) * unit,
-            cy - 3 * unit - dirY * (TANK_R + 11) * unit
+            cy - 3 * unit - liftPx - dirY * (TANK_R + 11) * unit
           );
           ctx.stroke();
           ctx.restore();
 
           ctx.save();
-          ctx.translate(cx, cy);
+          ctx.translate(cx, cy - liftPx);
           ctx.rotate(tilt);
           ctx.fillStyle = bodyColor;
           ctx.strokeStyle = darkColor;
@@ -782,7 +974,7 @@ export default function Field({
         }
 
         // Pilot badge & mini HP bar above tank (positioned with uniform unit scale)
-        const labelY = cy + TANK_R * scaleY - 68 * unit;
+        const labelY = cy + TANK_R * scaleY - 68 * unit - liftPx;
         const barW = 42 * unit;
         const barH = Math.max(4, 5.5 * unit);
         ctx.fillStyle = "rgba(9, 13, 22, 0.75)";

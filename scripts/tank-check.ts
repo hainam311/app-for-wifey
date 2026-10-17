@@ -24,7 +24,9 @@ import {
   type ShotKind,
   type Tank,
   type TankState,
+  MOBILES,
 } from "../lib/tank/engine";
+import { MOTION, kick, newBody, smoothGround, stepBody, support } from "../lib/tank/motion";
 
 let failed = 0;
 let passed = 0;
@@ -537,6 +539,189 @@ function makeTestTank(x: number, facing: 1 | -1 = 1, hp = MAX_HP): Tank {
       gNext.tanks.nam.mobile === "dragon" &&
       gNext.tanks.linh.mobile === "mage"
   );
+}
+
+// --- 19. Motion (visual only): every mobile moves, settles, and stays stable --
+{
+  const flat = () => 300;
+  const sim = (
+    id: (typeof MOBILES)[number]["id"],
+    fromX: number,
+    toX: number,
+    secs: number,
+    groundAt: (x: number) => number = flat,
+    alive = true
+  ) => {
+    const body = newBody(fromX, groundAt);
+    let contacts = 0;
+    let maxX = -Infinity;
+    let minGapBelow = Infinity;
+    let pose = stepBody(body, { x: fromX, groundAt, alive }, MOTION[id], 0, 0);
+    for (let i = 1; i <= Math.round(secs * 60); i++) {
+      pose = stepBody(body, { x: toX, groundAt, alive }, MOTION[id], 1 / 60, i / 60);
+      if (pose.contact) contacts++;
+      maxX = Math.max(maxX, body.x);
+      minGapBelow = Math.min(minGapBelow, body.gy - groundAt(body.x));
+    }
+    return { body, pose, contacts, maxX, minGapBelow };
+  };
+
+  check(
+    "every mobile has a motion profile",
+    MOBILES.every((m) => MOTION[m.id] !== undefined)
+  );
+
+  const allSettle = MOBILES.every((m) => {
+    const r = sim(m.id, 500, 600, 1.5);
+    return r.body.x === 600 && r.maxX <= 600.5 && r.pose.moving < 0.05;
+  });
+  check("each mobile reaches the engine x without overshoot and stops", allSettle);
+
+  const far = sim("armor", 100, 900, 1 / 60);
+  check("a jump of more than 160 units snaps (new game, first frame)", far.body.x === 900);
+
+  const dragon = sim("dragon", 400, 500, 2);
+  const armor = sim("armor", 400, 500, 2);
+  check(
+    `dragon hops while it moves (${dragon.contacts} landings), armor does not`,
+    dragon.contacts >= 3 && armor.contacts === 0
+  );
+
+  const hoverAlive = sim("mage", 500, 500, 1);
+  const hoverDead = sim("mage", 500, 500, 1, flat, false);
+  check(
+    "mage hovers above the ground when alive and rests on it when dead",
+    hoverAlive.pose.lift > 3 && hoverDead.pose.lift === 0
+  );
+
+  // Crater under a walker: the ground drops 40 units → the body falls and lands
+  {
+    let g = 300;
+    const groundAt = () => g;
+    const body = newBody(600, groundAt);
+    for (let i = 0; i < 30; i++) stepBody(body, { x: 600, groundAt, alive: true }, MOTION.turtle, 1 / 60, i / 60);
+    g = 260;
+    let landedBy = -1;
+    let lowest = Infinity;
+    for (let i = 0; i < 120; i++) {
+      stepBody(body, { x: 600, groundAt, alive: true }, MOTION.turtle, 1 / 60, i / 60);
+      lowest = Math.min(lowest, body.gy - g);
+      if (landedBy < 0 && Math.abs(body.gy - g) < 0.01) landedBy = i;
+    }
+    check(
+      `a walker falls into a crater and lands (frame ${landedBy}), never sinks far below`,
+      landedBy > 0 && landedBy < 30 && lowest > -3 && Math.abs(body.gy - g) < 0.5
+    );
+  }
+
+  // Recoil and hit kicks settle back
+  {
+    const body = newBody(600, flat);
+    kick(body, { recoil: -180, liftv: 250, rotv: 6 });
+    let pose = stepBody(body, { x: 600, groundAt: flat, alive: true }, MOTION.armor, 1 / 60, 0);
+    let peak = 0;
+    for (let i = 0; i < 120; i++) {
+      pose = stepBody(body, { x: 600, groundAt: flat, alive: true }, MOTION.armor, 1 / 60, i / 60);
+      peak = Math.max(peak, Math.abs(body.recoil));
+    }
+    check(
+      "recoil and knock-back kicks move the body, then settle within 2 s",
+      peak > 2 && Math.abs(body.recoil) < 0.3 && Math.abs(body.gy - 300) < 0.5 && Math.abs(pose.rot) < 0.03
+    );
+  }
+
+  // Stability: random frame times (also 0, huge and NaN) on bumpy ground
+  {
+    const rng = makeRng(7);
+    const bumpy = (x: number) => 300 + 40 * Math.sin(x * 0.05);
+    let ok = true;
+    for (const m of MOBILES) {
+      const body = newBody(300, bumpy);
+      let t = 0;
+      for (let i = 0; i < 1200; i++) {
+        const r = rng();
+        const dt = r < 0.02 ? NaN : r < 0.04 ? 0 : r < 0.06 ? 5 : r * 0.05;
+        t += Number.isFinite(dt) ? dt : 0;
+        const target = 300 + Math.round(rng() * 120) * (i % 200 < 100 ? 1 : -1) + 120;
+        const pose = stepBody(body, { x: target, groundAt: bumpy, alive: i < 1000 }, MOTION[m.id], dt, t);
+        if (i % 97 === 0) kick(body, { recoil: (rng() - 0.5) * 300, liftv: rng() * 300, rotv: (rng() - 0.5) * 10 });
+        const vals = [pose.x, pose.ground, pose.lift, pose.rot, pose.sx, pose.sy];
+        if (!vals.every(Number.isFinite) || Math.abs(pose.rot) > 0.6 || pose.sy < 0.7 || pose.sy > 1.3) ok = false;
+      }
+    }
+    check("motion stays finite and bounded with random frame times and kicks", ok);
+  }
+}
+
+// --- 20. Ground contact (visual): smooth ground, two-point support, slope speed --
+{
+  const near = (a: number, b: number, eps = 0.01) => Math.abs(a - b) <= eps;
+
+  // Smooth ground: column centers are exact, halfway between them is the mean
+  const steps = Array.from({ length: COLS }, (_, i) => (i % 2 === 0 ? 300 : 340));
+  const sm = smoothGround(steps);
+  check(
+    "smoothGround passes through column centers and blends between them",
+    near(sm(2), 300) && near(sm(6), 340) && near(sm(4), 320) && near(sm(0), 300) && near(sm(1199.9), 340)
+  );
+
+  const flat = () => 300;
+  const sFlat = support(flat, 600, 20);
+  check("support on flat ground: height = ground, no tilt", near(sFlat.height, 300) && near(sFlat.tilt, 0));
+
+  const ramp = (x: number) => 200 + 0.3 * x; // rises to the right
+  const sRamp = support(ramp, 600, 20);
+  check(
+    "support on a ramp: height = ground at the center, tilt = −atan(slope)",
+    near(sRamp.height, 380) && near(sRamp.tilt, -Math.atan(0.3), 1e-6)
+  );
+
+  // A narrow dip (8 units wide, 50 deep) under the center: the body bridges it
+  const dip = (x: number) => (Math.abs(x - 600) < 4 ? 250 : 300);
+  const sDip = support(dip, 600, 20);
+  check("a mobile bridges a small dip instead of dropping into it", near(sDip.height, 300) && near(sDip.tilt, 0));
+
+  // A peak just left of the center: the body rests on the peak and the right contact
+  const peak = (x: number) => 300 - Math.abs(x - 595) * 1.2;
+  const sPeak = support(peak, 600, 20);
+  check(
+    "on a peak the body pivots on the top and leans down toward the side of its center",
+    near(sPeak.height, peak(600)) && sPeak.tilt > 0 &&
+      near(support(peak, 590, 20).height, peak(590)) && support(peak, 590, 20).tilt < 0
+  );
+
+  // Center just past a crater edge: the body tips toward the hole
+  const edge = (x: number) => (x < 597 ? 300 : 120);
+  const sEdge = support(edge, 600, 20);
+  check("past a crater edge the body tips toward the hole", sEdge.tilt >= 0.49 && sEdge.height < 300);
+
+  // Slope feel: driving 60 units takes longer uphill than on flat ground, and less downhill
+  const timeTo = (g: (x: number) => number, from: number, to: number) => {
+    const body = newBody(from, g, 0, MOTION.armor.foot);
+    for (let i = 1; i <= 600; i++) {
+      stepBody(body, { x: to, groundAt: g, alive: true }, MOTION.armor, 1 / 60, i / 60);
+      if (Math.abs(body.x - to) < 1) return i;
+    }
+    return 999;
+  };
+  const up = timeTo(ramp, 500, 560);
+  const lvl = timeTo(flat, 500, 560);
+  const down = timeTo(ramp, 560, 500);
+  check(`uphill is slower, downhill faster (frames: up ${up}, flat ${lvl}, down ${down})`, up > lvl && down < lvl);
+
+  // Driving across stepped ground: the shown height changes smoothly (no stair jumps)
+  {
+    const g = smoothGround(Array.from({ length: COLS }, (_, i) => 250 + 4 * Math.floor(i / 3)));
+    const body = newBody(400, g, 0, MOTION.armor.foot);
+    let maxJump = 0;
+    let prev = body.gy;
+    for (let i = 1; i <= 120; i++) {
+      stepBody(body, { x: 400 + i, groundAt: g, alive: true }, MOTION.armor, 1 / 60, i / 60);
+      maxJump = Math.max(maxJump, Math.abs(body.gy - prev));
+      prev = body.gy;
+    }
+    check(`a mobile rolls smoothly over stepped ground (max ${maxJump.toFixed(2)} units per frame)`, maxJump < 1);
+  }
 }
 
 console.log(`${passed} passed, ${failed} failed`);
