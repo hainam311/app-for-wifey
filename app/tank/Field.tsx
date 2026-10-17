@@ -11,9 +11,12 @@ import {
   tankY,
 } from "@/lib/tank/terrain";
 import {
+  DEFAULT_MOBILE,
   MAX_HP,
+  MOBILES,
   type Aim,
   type LastShot,
+  type MobileId,
   type Player,
   type Tank,
   type TankState,
@@ -131,6 +134,7 @@ export default function Field({
   const floatsRef = useRef<DamageFloat[]>([]);
   const debrisRef = useRef<DebrisParticle[]>([]);
   const motesRef = useRef<WindMote[]>([]);
+  const spritesRef = useRef<Partial<Record<MobileId, HTMLImageElement>>>({});
   const draggingRef = useRef(false);
 
   // Keep latest props in a ref so the requestAnimationFrame loop never reads stale closures
@@ -156,6 +160,14 @@ export default function Field({
   });
 
   useEffect(() => {
+    for (const m of MOBILES) {
+      if (!spritesRef.current[m.id]) {
+        const img = new Image();
+        img.src = m.sprite;
+        spritesRef.current[m.id] = img;
+      }
+    }
+
     if (motesRef.current.length === 0) {
       for (let i = 0; i < 28; i++) {
         motesRef.current.push({
@@ -639,20 +651,20 @@ export default function Field({
           curAim.kind === "ss" &&
           t.alive
         ) {
-          const auraR = (TANK_R + 10 + Math.sin(now * 0.01) * 3) * scaleX;
+          const auraR = (TANK_R + 18 + Math.sin(now * 0.01) * 3) * scaleX;
           const aura = ctx.createRadialGradient(
             cx,
-            cy,
+            cy - 6 * scaleY,
             4 * scaleX,
             cx,
-            cy,
+            cy - 6 * scaleY,
             auraR
           );
-          aura.addColorStop(0, "rgba(250, 204, 21, 0.45)");
+          aura.addColorStop(0, "rgba(250, 204, 21, 0.55)");
           aura.addColorStop(1, "rgba(250, 204, 21, 0)");
           ctx.fillStyle = aura;
           ctx.beginPath();
-          ctx.arc(cx, cy, auraR, 0, Math.PI * 2);
+          ctx.arc(cx, cy - 6 * scaleY, auraR, 0, Math.PI * 2);
           ctx.fill();
         }
 
@@ -672,25 +684,25 @@ export default function Field({
             t.facing === 1 ? -rad : Math.PI + rad;
           ctx.arc(
             cx,
-            cy - 2 * scaleY,
-            34 * scaleX,
+            cy - 6 * scaleY,
+            38 * scaleX,
             startAng,
             endAng,
             t.facing === 1
           );
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.35)";
-          ctx.lineWidth = Math.max(1, 1.5 * scaleX);
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+          ctx.lineWidth = Math.max(1.2, 1.8 * scaleX);
           ctx.stroke();
 
           // Aim sight line
           ctx.setLineDash([5 * scaleX, 4 * scaleX]);
           ctx.strokeStyle = isNam
-            ? "rgba(255, 228, 230, 0.9)"
-            : "rgba(224, 242, 254, 0.9)";
-          ctx.lineWidth = Math.max(1.8, 2.5 * scaleX);
+            ? "rgba(255, 228, 230, 0.95)"
+            : "rgba(224, 242, 254, 0.95)";
+          ctx.lineWidth = Math.max(2, 2.6 * scaleX);
           ctx.beginPath();
-          ctx.moveTo(cx + dirX * 18 * scaleX, cy - dirY * 18 * scaleY);
-          ctx.lineTo(cx + dirX * 72 * scaleX, cy - dirY * 72 * scaleY);
+          ctx.moveTo(cx + dirX * 22 * scaleX, cy - 6 * scaleY - dirY * 22 * scaleY);
+          ctx.lineTo(cx + dirX * 78 * scaleX, cy - 6 * scaleY - dirY * 78 * scaleY);
           ctx.stroke();
           ctx.restore();
         }
@@ -703,106 +715,74 @@ export default function Field({
           Math.min(0.38, Math.atan2(hL - hR, 16))
         );
 
-        // Barrel (always in world angle space)
-        ctx.save();
-        ctx.strokeStyle = darkColor;
-        ctx.lineWidth = Math.max(3, 6 * scaleX);
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        ctx.moveTo(cx, cy - 3 * scaleY);
-        ctx.lineTo(
-          cx + dirX * (TANK_R + 11) * scaleX,
-          cy - 3 * scaleY - dirY * (TANK_R + 11) * scaleY
-        );
-        ctx.stroke();
+        const mobileId: MobileId = t.mobile ?? DEFAULT_MOBILE[p];
+        const spriteImg = spritesRef.current[mobileId];
+        const hasSprite =
+          spriteImg && spriteImg.complete && spriteImg.naturalWidth > 0;
 
-        ctx.strokeStyle = hiColor;
-        ctx.lineWidth = Math.max(1.2, 2 * scaleX);
-        ctx.beginPath();
-        ctx.moveTo(cx, cy - 4 * scaleY);
-        ctx.lineTo(
-          cx + dirX * (TANK_R + 9) * scaleX,
-          cy - 4 * scaleY - dirY * (TANK_R + 9) * scaleY
-        );
-        ctx.stroke();
-        ctx.restore();
-
-        // Tilted tank chassis + turret + wheels
-        ctx.save();
-        ctx.translate(cx, cy);
-        ctx.rotate(tilt);
-
-        // Turret dome
-        ctx.fillStyle = bodyColor;
-        ctx.strokeStyle = darkColor;
-        ctx.lineWidth = Math.max(1.5, 2 * scaleX);
-        ctx.beginPath();
-        ctx.arc(0, -2 * scaleY, 9.5 * scaleX, Math.PI, 0);
-        ctx.fill();
-        ctx.stroke();
-
-        // Dome specular shine
-        ctx.fillStyle = hiColor;
-        ctx.beginPath();
-        ctx.ellipse(
-          -3 * scaleX * t.facing,
-          -6.5 * scaleY,
-          3.5 * scaleX,
-          1.8 * scaleY,
-          -0.3 * t.facing,
-          0,
-          Math.PI * 2
-        );
-        ctx.fill();
-
-        // Main armored hull
-        ctx.fillStyle = bodyColor;
-        ctx.beginPath();
-        ctx.roundRect(
-          -TANK_R * scaleX,
-          -3 * scaleY,
-          TANK_R * 2 * scaleX,
-          10 * scaleY,
-          5 * scaleX
-        );
-        ctx.fill();
-        ctx.stroke();
-
-        // Caterpillar tread belt
-        ctx.fillStyle = "#27272a";
-        ctx.strokeStyle = darkColor;
-        ctx.lineWidth = Math.max(1, 1.5 * scaleX);
-        ctx.beginPath();
-        ctx.roundRect(
-          -(TANK_R - 1) * scaleX,
-          5 * scaleY,
-          (TANK_R - 1) * 2 * scaleX,
-          6.5 * scaleY,
-          3.2 * scaleX
-        );
-        ctx.fill();
-        ctx.stroke();
-
-        // 4 road wheels inside treads
-        ctx.fillStyle = hiColor;
-        for (const wxOff of [-8.5, -2.8, 2.8, 8.5]) {
+        if (hasSprite) {
+          ctx.save();
+          // Anchor at bottom of treads on terrain surface
+          ctx.translate(cx, cy + TANK_R * scaleY);
+          ctx.rotate(tilt);
+          ctx.scale(t.facing, 1);
+          if (!t.alive) {
+            ctx.filter = "grayscale(100%) brightness(65%)";
+          }
+          const spriteW = 58 * scaleX;
+          const spriteH = 58 * scaleY;
+          ctx.drawImage(
+            spriteImg,
+            -spriteW / 2,
+            -spriteH + 4 * scaleY,
+            spriteW,
+            spriteH
+          );
+          ctx.restore();
+        } else {
+          // Fallback vector tank while sprite image loads
+          ctx.save();
+          ctx.strokeStyle = darkColor;
+          ctx.lineWidth = Math.max(3, 6 * scaleX);
+          ctx.lineCap = "round";
           ctx.beginPath();
-          ctx.arc(
-            wxOff * scaleX,
-            8.2 * scaleY,
-            1.8 * scaleX,
-            0,
-            Math.PI * 2
+          ctx.moveTo(cx, cy - 3 * scaleY);
+          ctx.lineTo(
+            cx + dirX * (TANK_R + 11) * scaleX,
+            cy - 3 * scaleY - dirY * (TANK_R + 11) * scaleY
+          );
+          ctx.stroke();
+          ctx.restore();
+
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(tilt);
+          ctx.fillStyle = bodyColor;
+          ctx.strokeStyle = darkColor;
+          ctx.lineWidth = Math.max(1.5, 2 * scaleX);
+          ctx.beginPath();
+          ctx.arc(0, -2 * scaleY, 9.5 * scaleX, Math.PI, 0);
+          ctx.fill();
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.roundRect(
+            -TANK_R * scaleX,
+            -3 * scaleY,
+            TANK_R * 2 * scaleX,
+            10 * scaleY,
+            5 * scaleX
           );
           ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = hiColor;
+          ctx.restore();
         }
-        ctx.restore();
 
         // Pilot badge & mini HP bar above tank
-        const labelY = cy - (TANK_R + 18) * scaleY;
-        const barW = 36 * scaleX;
-        const barH = Math.max(3.5, 5 * scaleY);
-        ctx.fillStyle = "rgba(24, 24, 27, 0.65)";
+        const labelY = cy - (TANK_R + 36) * scaleY;
+        const barW = 40 * scaleX;
+        const barH = Math.max(4, 5.5 * scaleY);
+        ctx.fillStyle = "rgba(9, 13, 22, 0.75)";
         ctx.beginPath();
         ctx.roundRect(cx - barW / 2 - 1, labelY - 1, barW + 2, barH + 2, 3);
         ctx.fill();

@@ -12,6 +12,7 @@ import {
   MAX_FUEL,
   MAX_HP,
   SHOTS,
+  chooseMobile,
   drive,
   explode,
   fire,
@@ -519,6 +520,22 @@ function makeTestTank(x: number, facing: 1 | -1 = 1, hp = MAX_HP): Tank {
   check(
     `500 random games all end cleanly (hp: ${reasons.hp}, fell: ${reasons.fell}, both: ${reasons.both})`,
     bad === 0 && games === 500
+  );
+}
+
+// --- 18. chooseMobile updates player's mobile and nextGame preserves it ------
+{
+  const g0 = newGame("linh", makeRng(99), undefined, 1000);
+  const c1 = chooseMobile(g0, "nam", "dragon", 1010);
+  const c2 = c1.ok ? chooseMobile(c1.state, "linh", "mage", 1020) : c1;
+  const gNext = c2.ok ? nextGame(c2.state, makeRng(100), 2000) : g0;
+  check(
+    "chooseMobile updates mobile and nextGame preserves both players' mobiles",
+    c2.ok &&
+      c2.state.tanks.nam.mobile === "dragon" &&
+      c2.state.tanks.linh.mobile === "mage" &&
+      gNext.tanks.nam.mobile === "dragon" &&
+      gNext.tanks.linh.mobile === "mage"
   );
 }
 

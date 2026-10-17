@@ -16,6 +16,62 @@ import {
 
 export type Player = Who;
 export type ShotKind = "s1" | "s2" | "ss";
+export type MobileId =
+  | "armor"
+  | "mage"
+  | "dragon"
+  | "spider"
+  | "turtle"
+  | "unicorn";
+
+export const MOBILES: ReadonlyArray<{
+  id: MobileId;
+  name: string;
+  subtitle: string;
+  sprite: string;
+}> = [
+  {
+    id: "armor",
+    name: "Armor Bear",
+    subtitle: "Đại bác hạng nặng",
+    sprite: "/tanks/samples/01-armor-bear.png",
+  },
+  {
+    id: "mage",
+    name: "Mage Hover",
+    subtitle: "Đĩa bay pha lê",
+    sprite: "/tanks/samples/02-mage-hover.png",
+  },
+  {
+    id: "dragon",
+    name: "Baby Dragon",
+    subtitle: "Rồng lửa GunBound",
+    sprite: "/tanks/samples/03-baby-dragon.png",
+  },
+  {
+    id: "spider",
+    name: "Nak Spider",
+    subtitle: "Nhện máy Plasma",
+    sprite: "/tanks/samples/04-spider-mecha.png",
+  },
+  {
+    id: "turtle",
+    name: "Turtle Cannon",
+    subtitle: "Rùa thần công",
+    sprite: "/tanks/samples/05-turtle-cannon.png",
+  },
+  {
+    id: "unicorn",
+    name: "Unicorn Cloud",
+    subtitle: "Mây kỳ lân hồng",
+    sprite: "/tanks/samples/06-pink-cloud-unicorn.png",
+  },
+];
+
+export const DEFAULT_MOBILE: Record<Player, MobileId> = {
+  nam: "armor",
+  linh: "unicorn",
+};
 
 export type Tank = {
   x: number; // world units, integer
@@ -25,6 +81,7 @@ export type Tank = {
   alive: boolean; // false after 0 HP or a fall
   lastAngle: number; // aim of the last shot (GunBound-style marker)
   lastPower: number;
+  mobile?: MobileId; // selected GunBound mobile sprite
 };
 
 export type Boom = {
@@ -104,7 +161,7 @@ function randomWind(rng: () => number): number {
   return Math.floor(rng() * 21) - 10; // integer in [-10, 10]
 }
 
-function makeTank(x: number, facing: 1 | -1): Tank {
+function makeTank(x: number, facing: 1 | -1, mobile: MobileId): Tank {
   return {
     x,
     hp: MAX_HP,
@@ -113,6 +170,7 @@ function makeTank(x: number, facing: 1 | -1): Tank {
     alive: true,
     lastAngle: 45,
     lastPower: 0,
+    mobile,
   };
 }
 
@@ -120,15 +178,24 @@ export function newGame(
   startedBy: Player,
   rng: () => number = Math.random,
   tally: Tally = { nam: 0, linh: 0, draws: 0 },
-  now = Date.now()
+  now = Date.now(),
+  mobiles: { nam?: MobileId; linh?: MobileId } = {}
 ): TankState {
   const ground = makeGround(rng);
   const leftX = Math.round(WORLD_W * 0.15 + (rng() - 0.5) * 40);
   const rightX = Math.round(WORLD_W * 0.85 + (rng() - 0.5) * 40);
   const namOnLeft = rng() < 0.5;
+  const namMobile = mobiles.nam ?? DEFAULT_MOBILE.nam;
+  const linhMobile = mobiles.linh ?? DEFAULT_MOBILE.linh;
   const tanks: { nam: Tank; linh: Tank } = namOnLeft
-    ? { nam: makeTank(leftX, 1), linh: makeTank(rightX, -1) }
-    : { nam: makeTank(rightX, -1), linh: makeTank(leftX, 1) };
+    ? {
+        nam: makeTank(leftX, 1, namMobile),
+        linh: makeTank(rightX, -1, linhMobile),
+      }
+    : {
+        nam: makeTank(rightX, -1, namMobile),
+        linh: makeTank(leftX, 1, linhMobile),
+      };
 
   return {
     gameId: now,
@@ -143,14 +210,41 @@ export function newGame(
   };
 }
 
-// "Ván mới": the other player starts, the tally carries over.
+// "Ván mới": the other player starts, the tally & chosen mobiles carry over.
 export function nextGame(
   state: TankState,
   rng: () => number = Math.random,
   now = Date.now()
 ): TankState {
   const nextId = Math.max(now, state.gameId + 1);
-  return newGame(other(state.startedBy), rng, state.tally, nextId);
+  return newGame(other(state.startedBy), rng, state.tally, nextId, {
+    nam: state.tanks.nam.mobile,
+    linh: state.tanks.linh.mobile,
+  });
+}
+
+// Choose or switch your GunBound mobile for the match.
+export function chooseMobile(
+  state: TankState,
+  me: Player,
+  mobile: MobileId,
+  now = Date.now()
+): StateResult {
+  if (!MOBILES.some((m) => m.id === mobile)) {
+    return { ok: false, reason: "Xe này không hợp lệ 🤔" };
+  }
+  const next: TankState = {
+    ...state,
+    tanks: {
+      ...state.tanks,
+      [me]: {
+        ...state.tanks[me],
+        mobile,
+      },
+    },
+    updatedAt: now,
+  };
+  return { ok: true, state: next };
 }
 
 // Moves 1 unit per unit of fuel toward `toX`.

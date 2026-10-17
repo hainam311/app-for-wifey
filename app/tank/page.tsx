@@ -9,8 +9,11 @@ import { gameRef } from "@/lib/tank/gameDoc";
 import Field, { type ShotPlayback } from "./Field";
 import Controls from "./Controls";
 import {
+  DEFAULT_MOBILE,
   MAX_FUEL,
   MAX_HP,
+  MOBILES,
+  chooseMobile,
   drive,
   fire,
   newGame,
@@ -18,6 +21,7 @@ import {
   other,
   resign,
   type Aim,
+  type MobileId,
   type Player,
   type StateResult,
   type TankState,
@@ -138,6 +142,11 @@ function TankGame({
   const [finishedShotN, setFinishedShotN] = useState<number>(
     () => game.lastShot?.n ?? 0
   );
+  // Open the GunBound mobile picker automatically at the start of a fresh match
+  const [showPicker, setShowPicker] = useState<boolean>(
+    () => game.status === "playing" && (game.lastShot?.n ?? 0) === 0
+  );
+  const [pickerPlayer, setPickerPlayer] = useState<Player>(me);
 
   const prevStateRef = useRef<TankState>(game);
   const seenShotNRef = useRef<number>(game.lastShot?.n ?? 0);
@@ -169,6 +178,7 @@ function TankGame({
       ]);
       setAim(defaultAimFor(game, me));
       setFuelLeft(MAX_FUEL);
+      setShowPicker(false);
     }
     prevStateRef.current = game;
   }, [game, hotseat, me]);
@@ -189,6 +199,7 @@ function TankGame({
 
   const handleSpendFuel = useCallback((spent: number) => {
     setFuelLeft((prev) => Math.max(0, prev - spent));
+    setShowPicker(false);
   }, []);
 
   const run = useCallback(
@@ -220,9 +231,17 @@ function TankGame({
     [busy, say]
   );
 
+  const handleSelectMobile = useCallback(
+    (who: Player, mobile: MobileId) => {
+      run((s) => chooseMobile(s, who, mobile));
+    },
+    [run]
+  );
+
   const handleFire = useCallback(
     (power: number) => {
       if (!playable) return;
+      setShowPicker(false);
       const shotAim: Aim = { ...aim, power };
       run((s) => fire(s, me, shotAim, Math.random));
     },
@@ -235,6 +254,7 @@ function TankGame({
   }, []);
 
   const handleDragAim = useCallback((angle: number, facing: 1 | -1) => {
+    setShowPicker(false);
     setAim((prev) => ({ ...prev, angle, facing }));
   }, []);
 
@@ -251,6 +271,9 @@ function TankGame({
     );
 
   const nextStarter = other(game.startedBy);
+  const activePickerWho: Player = hotseat ? pickerPlayer : me;
+  const currentMobileId: MobileId =
+    game.tanks[activePickerWho].mobile ?? DEFAULT_MOBILE[activePickerWho];
 
   return (
     <main className="mx-auto flex h-[100svh] w-full max-w-5xl flex-col items-center justify-center p-1.5 sm:p-4">
@@ -292,9 +315,25 @@ function TankGame({
               </div>
             </div>
 
-            {/* Center: Wind + Turn Badge + Resign icon */}
+            {/* Center: Wind + Change Mobile + Turn Badge + Resign icon */}
             <div className="pointer-events-auto flex flex-col items-center gap-0.5 px-1">
               <div className="flex items-center gap-1.5">
+                {!showOver && (
+                  <button
+                    type="button"
+                    data-testid="open-picker-btn"
+                    title="Đổi xe GunBound"
+                    disabled={busy || !!activePlayback}
+                    onClick={() => {
+                      setPickerPlayer(me);
+                      setShowPicker((v) => !v);
+                    }}
+                    className="rounded-full border border-amber-300/45 bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-200 hover:bg-amber-500/35 disabled:opacity-40"
+                  >
+                    🚗 Đổi xe
+                  </button>
+                )}
+
                 <span
                   data-testid="wind"
                   className="rounded-full border border-sky-300/40 bg-sky-500/25 px-2.5 py-0.5 text-[11px] font-extrabold text-sky-200 sm:text-xs"
@@ -368,6 +407,80 @@ function TankGame({
             </div>
           )}
         </div>
+
+        {/* CENTER MOBILE PICKER MODAL (at start of game or when clicking 🚗 Đổi xe) */}
+        {showPicker && !showOver && (
+          <div
+            data-testid="mobile-picker"
+            className="pointer-events-auto relative z-20 mx-auto my-auto flex w-[92%] max-w-md flex-col items-center gap-2 rounded-3xl border border-amber-300/40 bg-zinc-950/85 p-3 text-white shadow-2xl backdrop-blur-md sm:p-4"
+          >
+            <div className="flex w-full items-center justify-between">
+              <p className="text-xs font-extrabold tracking-wide text-amber-300 sm:text-sm">
+                ✨ Chọn Xe GunBound ({NAME[activePickerWho]})
+              </p>
+              {hotseat && (
+                <div className="flex gap-1">
+                  {(["nam", "linh"] as const).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPickerPlayer(p)}
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold transition ${
+                        pickerPlayer === p
+                          ? "bg-amber-400 text-zinc-950"
+                          : "bg-white/10 text-zinc-300 hover:bg-white/20"
+                      }`}
+                    >
+                      {NAME[p]}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid w-full grid-cols-3 gap-2">
+              {MOBILES.map((m) => {
+                const selected = currentMobileId === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    data-testid={`mobile-${m.id}`}
+                    disabled={busy}
+                    onClick={() => handleSelectMobile(activePickerWho, m.id)}
+                    className={`flex flex-col items-center rounded-2xl border p-1.5 text-center transition active:scale-95 ${
+                      selected
+                        ? "border-amber-300 bg-amber-400/20 shadow-[0_0_12px_rgba(251,191,36,0.35)]"
+                        : "border-white/15 bg-white/5 hover:bg-white/15"
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={m.sprite}
+                      alt={m.name}
+                      className="h-12 w-12 object-contain sm:h-14 sm:w-14"
+                    />
+                    <span className="mt-0.5 text-[11px] font-extrabold text-amber-100">
+                      {m.name}
+                    </span>
+                    <span className="text-[9px] text-zinc-300">
+                      {m.subtitle}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              type="button"
+              data-testid="confirm-mobile-btn"
+              onClick={() => setShowPicker(false)}
+              className="mt-0.5 w-full rounded-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 py-1.5 text-xs font-extrabold text-white shadow-lg hover:brightness-110 active:scale-95 sm:text-sm"
+            >
+              Vào trận! 💥
+            </button>
+          </div>
+        )}
 
         {/* CENTER GAME-OVER OVERLAY MODAL (inside the game window) */}
         {showOver && (
