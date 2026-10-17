@@ -147,6 +147,16 @@ function TankGame({
     () => game.status === "playing" && (game.lastShot?.n ?? 0) === 0
   );
   const [pickerPlayer, setPickerPlayer] = useState<Player>(me);
+  const [isPortrait, setIsPortrait] = useState<boolean>(false);
+
+  useEffect(() => {
+    const updateOrientation = () => {
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+    updateOrientation();
+    window.addEventListener("resize", updateOrientation);
+    return () => window.removeEventListener("resize", updateOrientation);
+  }, []);
 
   const prevStateRef = useRef<TankState>(game);
   const seenShotNRef = useRef<number>(game.lastShot?.n ?? 0);
@@ -276,9 +286,27 @@ function TankGame({
     game.tanks[activePickerWho].mobile ?? DEFAULT_MOBILE[activePickerWho];
 
   return (
-    <main className="mx-auto flex h-[100svh] w-full max-w-5xl flex-col items-center justify-center p-1.5 sm:p-4">
-      {/* Unified Mobile-Game Window: Canvas + Floating Top/Bottom/Center HUDs */}
-      <div className="relative flex h-full max-h-[680px] w-full flex-col justify-between overflow-hidden rounded-3xl border-2 border-pink-300/70 bg-slate-950 shadow-2xl">
+    <main className="fixed inset-0 flex items-center justify-center overflow-hidden bg-slate-950 p-0 sm:p-3">
+      {/* Unified Horizontal (Landscape) Mobile-Game Window */}
+      <div
+        style={
+          isPortrait
+            ? {
+                position: "fixed",
+                top: "50%",
+                left: "50%",
+                width: "100svh",
+                height: "100vw",
+                transform: "translate(-50%, -50%) rotate(90deg)",
+              }
+            : undefined
+        }
+        className={`flex flex-col justify-between overflow-hidden bg-slate-950 shadow-2xl ${
+          isPortrait
+            ? ""
+            : "relative aspect-[2/1] max-h-full w-full max-w-5xl rounded-3xl border-2 border-pink-300/70"
+        }`}
+      >
         {/* Background Battlefield Canvas */}
         <div className="absolute inset-0">
           <Field
@@ -295,10 +323,20 @@ function TankGame({
         </div>
 
         {/* TOP HUD OVERLAY (inside the game window) */}
-        <div className="pointer-events-none relative z-10 flex flex-col gap-1.5 p-2.5 pl-12 sm:p-3.5 sm:pl-14">
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-2xl border border-white/20 bg-zinc-950/55 px-3 py-1.5 text-white shadow-lg backdrop-blur-md">
+        <div className="pointer-events-none relative z-10 flex flex-col gap-1 px-2.5 pt-2 sm:px-3.5 sm:pt-2.5">
+          <div className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-2 rounded-2xl border border-white/20 bg-zinc-950/55 px-2.5 py-1 text-white shadow-lg backdrop-blur-md">
+            {/* In-HUD Home Button (rotates with landscape game!) */}
+            <Link
+              href="/"
+              aria-label="Về trang chủ"
+              title="Về nhà"
+              className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full border border-pink-300/50 bg-white/15 text-sm shadow hover:bg-white/25 active:scale-95"
+            >
+              🏠
+            </Link>
+
             {/* Nam HP */}
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-0.5">
               <div className="flex items-center justify-between text-[11px] font-bold sm:text-xs">
                 <span className="truncate">🐻 Nam</span>
                 <span data-testid="hp-nam" className="text-rose-300">
@@ -382,7 +420,7 @@ function TankGame({
             </div>
 
             {/* Linh HP */}
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-0.5">
               <div className="flex items-center justify-between text-[11px] font-bold sm:text-xs">
                 <span data-testid="hp-linh" className="text-sky-300">
                   {displayTanks.linh.hp}
@@ -402,25 +440,25 @@ function TankGame({
 
           {/* Floating Toast Notification */}
           {toast && (
-            <div className="mx-auto rounded-full border border-pink-300/50 bg-zinc-950/80 px-4 py-1 text-xs font-bold text-pink-300 shadow-lg backdrop-blur">
+            <div className="mx-auto rounded-full border border-pink-300/50 bg-zinc-950/80 px-4 py-0.5 text-xs font-bold text-pink-300 shadow-lg backdrop-blur">
               {toast}
             </div>
           )}
         </div>
 
-        {/* CENTER MOBILE PICKER MODAL (at start of game or when clicking 🚗 Đổi xe) */}
+        {/* CENTER MOBILE PICKER MODAL (Horizontal 6-column layout for landscape) */}
         {showPicker && !showOver && (
           <div
             data-testid="mobile-picker"
-            className="pointer-events-auto relative z-20 mx-auto my-auto flex w-[92%] max-w-md flex-col items-center gap-2 rounded-3xl border border-amber-300/40 bg-zinc-950/85 p-3 text-white shadow-2xl backdrop-blur-md sm:p-4"
+            className="pointer-events-auto relative z-20 mx-auto my-auto flex w-[94%] max-w-2xl flex-col items-center gap-1.5 rounded-2xl border border-amber-300/40 bg-zinc-950/85 px-3 py-2 text-white shadow-2xl backdrop-blur-md sm:gap-2 sm:p-3"
           >
-            <div className="flex w-full items-center justify-between">
+            <div className="flex w-full items-center justify-between gap-2">
               <p className="text-xs font-extrabold tracking-wide text-amber-300 sm:text-sm">
                 ✨ Chọn Xe GunBound ({NAME[activePickerWho]})
               </p>
-              {hotseat && (
-                <div className="flex gap-1">
-                  {(["nam", "linh"] as const).map((p) => (
+              <div className="flex items-center gap-1.5">
+                {hotseat &&
+                  (["nam", "linh"] as const).map((p) => (
                     <button
                       key={p}
                       type="button"
@@ -434,11 +472,18 @@ function TankGame({
                       {NAME[p]}
                     </button>
                   ))}
-                </div>
-              )}
+                <button
+                  type="button"
+                  data-testid="confirm-mobile-btn"
+                  onClick={() => setShowPicker(false)}
+                  className="rounded-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 px-4 py-1 text-xs font-extrabold text-white shadow-md hover:brightness-110 active:scale-95"
+                >
+                  Vào trận! 💥
+                </button>
+              </div>
             </div>
 
-            <div className="grid w-full grid-cols-3 gap-2">
+            <div className="grid w-full grid-cols-6 gap-1.5 sm:gap-2">
               {MOBILES.map((m) => {
                 const selected = currentMobileId === m.id;
                 return (
@@ -448,7 +493,7 @@ function TankGame({
                     data-testid={`mobile-${m.id}`}
                     disabled={busy}
                     onClick={() => handleSelectMobile(activePickerWho, m.id)}
-                    className={`flex flex-col items-center rounded-2xl border p-1.5 text-center transition active:scale-95 ${
+                    className={`flex flex-col items-center rounded-xl border p-1 text-center transition active:scale-95 sm:p-1.5 ${
                       selected
                         ? "border-amber-300 bg-amber-400/20 shadow-[0_0_12px_rgba(251,191,36,0.35)]"
                         : "border-white/15 bg-white/5 hover:bg-white/15"
@@ -458,27 +503,18 @@ function TankGame({
                     <img
                       src={m.sprite}
                       alt={m.name}
-                      className="h-12 w-12 object-contain sm:h-14 sm:w-14"
+                      className="h-10 w-10 object-contain sm:h-12 sm:w-12"
                     />
-                    <span className="mt-0.5 text-[11px] font-extrabold text-amber-100">
+                    <span className="mt-0.5 truncate text-[10px] font-extrabold text-amber-100 sm:text-[11px]">
                       {m.name}
                     </span>
-                    <span className="text-[9px] text-zinc-300">
+                    <span className="hidden truncate text-[9px] text-zinc-300 sm:block">
                       {m.subtitle}
                     </span>
                   </button>
                 );
               })}
             </div>
-
-            <button
-              type="button"
-              data-testid="confirm-mobile-btn"
-              onClick={() => setShowPicker(false)}
-              className="mt-0.5 w-full rounded-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 py-1.5 text-xs font-extrabold text-white shadow-lg hover:brightness-110 active:scale-95 sm:text-sm"
-            >
-              Vào trận! 💥
-            </button>
           </div>
         )}
 

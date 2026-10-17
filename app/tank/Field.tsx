@@ -208,11 +208,12 @@ export default function Field({
         onPlaybackDone: doneCb,
       } = latestRef.current;
 
-      // Sync canvas backing resolution with CSS size * devicePixelRatio
-      const rect = canvas.getBoundingClientRect();
+      // Sync canvas backing resolution with untransformed CSS layout size * devicePixelRatio
+      const cssW = canvas.clientWidth || canvas.getBoundingClientRect().width;
+      const cssH = canvas.clientHeight || canvas.getBoundingClientRect().height;
       const dpr = window.devicePixelRatio || 1;
-      const targetW = Math.max(1, Math.round(rect.width * dpr));
-      const targetH = Math.max(1, Math.round(rect.height * dpr));
+      const targetW = Math.max(1, Math.round(cssW * dpr));
+      const targetH = Math.max(1, Math.round(cssH * dpr));
       if (canvas.width !== targetW || canvas.height !== targetH) {
         canvas.width = targetW;
         canvas.height = targetH;
@@ -220,6 +221,8 @@ export default function Field({
 
       const scaleX = canvas.width / WORLD_W;
       const scaleY = canvas.height / WORLD_H;
+      // Uniform 1:1 pixel scale so tank sprites, circles, and UI badges never distort
+      const unit = Math.min(scaleX, scaleY);
       const wx = (x: number) => x * scaleX;
       const wy = (y: number) => (WORLD_H - y) * scaleY;
 
@@ -729,27 +732,27 @@ export default function Field({
           if (!t.alive) {
             ctx.filter = "grayscale(100%) brightness(65%)";
           }
-          const spriteW = 58 * scaleX;
-          const spriteH = 58 * scaleY;
+          // Strictly 1:1 uniform square dimensions so sprite is NEVER stretched or squished
+          const spriteSize = 68 * unit;
           ctx.drawImage(
             spriteImg,
-            -spriteW / 2,
-            -spriteH + 4 * scaleY,
-            spriteW,
-            spriteH
+            -spriteSize / 2,
+            -spriteSize + 5 * unit,
+            spriteSize,
+            spriteSize
           );
           ctx.restore();
         } else {
           // Fallback vector tank while sprite image loads
           ctx.save();
           ctx.strokeStyle = darkColor;
-          ctx.lineWidth = Math.max(3, 6 * scaleX);
+          ctx.lineWidth = Math.max(3, 6 * unit);
           ctx.lineCap = "round";
           ctx.beginPath();
-          ctx.moveTo(cx, cy - 3 * scaleY);
+          ctx.moveTo(cx, cy - 3 * unit);
           ctx.lineTo(
-            cx + dirX * (TANK_R + 11) * scaleX,
-            cy - 3 * scaleY - dirY * (TANK_R + 11) * scaleY
+            cx + dirX * (TANK_R + 11) * unit,
+            cy - 3 * unit - dirY * (TANK_R + 11) * unit
           );
           ctx.stroke();
           ctx.restore();
@@ -759,18 +762,18 @@ export default function Field({
           ctx.rotate(tilt);
           ctx.fillStyle = bodyColor;
           ctx.strokeStyle = darkColor;
-          ctx.lineWidth = Math.max(1.5, 2 * scaleX);
+          ctx.lineWidth = Math.max(1.5, 2 * unit);
           ctx.beginPath();
-          ctx.arc(0, -2 * scaleY, 9.5 * scaleX, Math.PI, 0);
+          ctx.arc(0, -2 * unit, 9.5 * unit, Math.PI, 0);
           ctx.fill();
           ctx.stroke();
           ctx.beginPath();
           ctx.roundRect(
-            -TANK_R * scaleX,
-            -3 * scaleY,
-            TANK_R * 2 * scaleX,
-            10 * scaleY,
-            5 * scaleX
+            -TANK_R * unit,
+            -3 * unit,
+            TANK_R * 2 * unit,
+            10 * unit,
+            5 * unit
           );
           ctx.fill();
           ctx.stroke();
@@ -778,10 +781,10 @@ export default function Field({
           ctx.restore();
         }
 
-        // Pilot badge & mini HP bar above tank
-        const labelY = cy - (TANK_R + 36) * scaleY;
-        const barW = 40 * scaleX;
-        const barH = Math.max(4, 5.5 * scaleY);
+        // Pilot badge & mini HP bar above tank (positioned with uniform unit scale)
+        const labelY = cy + TANK_R * scaleY - 68 * unit;
+        const barW = 42 * unit;
+        const barH = Math.max(4, 5.5 * unit);
         ctx.fillStyle = "rgba(9, 13, 22, 0.75)";
         ctx.beginPath();
         ctx.roundRect(cx - barW / 2 - 1, labelY - 1, barW + 2, barH + 2, 3);
@@ -798,10 +801,10 @@ export default function Field({
         );
         ctx.fill();
 
-        ctx.font = `${Math.max(12, Math.round(15 * scaleX))}px sans-serif`;
+        ctx.font = `${Math.max(12, Math.round(15 * unit))}px sans-serif`;
         ctx.textAlign = "center";
         const emoji = !t.alive ? "😵" : isNam ? "🐻" : "🧸";
-        ctx.fillText(emoji, cx, labelY - 4 * scaleY);
+        ctx.fillText(emoji, cx, labelY - 4 * unit);
       }
 
       // --- 4. Muzzle flash, shell smoke puffs & shell in flight ---
@@ -972,8 +975,16 @@ export default function Field({
 
     const rect = canvasRef.current.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
-    const px = ((clientX - rect.left) / rect.width) * WORLD_W;
-    const py = (1 - (clientY - rect.top) / rect.height) * WORLD_H;
+    // Support both normal landscape and 90deg clockwise rotated portrait container
+    const rotated = rect.height > rect.width;
+    const u = rotated
+      ? (clientY - rect.top) / rect.height
+      : (clientX - rect.left) / rect.width;
+    const v = rotated
+      ? (rect.right - clientX) / rect.width
+      : (clientY - rect.top) / rect.height;
+    const px = u * WORLD_W;
+    const py = (1 - v) * WORLD_H;
 
     const ty = tankY(curState.ground, curActualX);
     const dx = px - curActualX;

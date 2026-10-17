@@ -4,7 +4,13 @@ import { usePathname } from "next/navigation";
 
 export default function BackHome() {
   const pathname = usePathname();
-  if (!pathname || pathname === "/" || pathname === "/lock") return null;
+  if (
+    !pathname ||
+    pathname === "/" ||
+    pathname === "/lock" ||
+    pathname.startsWith("/tank")
+  )
+    return null;
 
   return (
     <Link

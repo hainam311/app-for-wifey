@@ -199,7 +199,7 @@ export default function Controls({
   ).join("");
 
   return (
-    <div className="pointer-events-auto flex w-full flex-col gap-1.5 rounded-2xl border border-white/15 bg-zinc-950/65 px-2.5 py-2 text-white shadow-xl backdrop-blur-md sm:gap-2 sm:px-3.5 sm:py-2.5">
+    <div className="pointer-events-auto flex w-full flex-col gap-1 rounded-2xl border border-white/15 bg-zinc-950/65 px-2.5 py-1.5 text-white shadow-xl backdrop-blur-md sm:gap-1.5 sm:px-3.5 sm:py-2">
       {/* Power bar row (GunBound style gauge) */}
       <div className="flex items-center gap-2">
         <span className="shrink-0 text-[11px] font-bold tracking-wide text-amber-300 sm:text-xs">
@@ -210,19 +210,18 @@ export default function Controls({
           onClick={(e) => {
             if (!playable || charging) return;
             const rect = e.currentTarget.getBoundingClientRect();
-            if (rect.width <= 0) return;
-            const pct = Math.max(
-              1,
-              Math.min(
-                100,
-                Math.round(((e.clientX - rect.left) / rect.width) * 100)
-              )
-            );
+            if (rect.width <= 0 || rect.height <= 0) return;
+            // When container is rotated 90deg clockwise on portrait screens, rect.height > rect.width
+            const ratio =
+              rect.height > rect.width
+                ? (e.clientY - rect.top) / rect.height
+                : (e.clientX - rect.left) / rect.width;
+            const pct = Math.max(1, Math.min(100, Math.round(ratio * 100)));
             manualPowerRef.current = true;
             currentPowerRef.current = pct;
             onChangeAim((prev) => ({ ...prev, power: pct }));
           }}
-          className="relative h-4 flex-1 cursor-pointer overflow-hidden rounded-full border border-white/25 bg-black/60 shadow-inner sm:h-4.5"
+          className="relative h-3.5 flex-1 cursor-pointer overflow-hidden rounded-full border border-white/25 bg-black/60 shadow-inner sm:h-4"
         >
           {/* Quarter tick marks (25, 50, 75) */}
           <div className="pointer-events-none absolute inset-0 flex justify-evenly">
