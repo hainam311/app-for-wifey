@@ -327,7 +327,7 @@ function TankGame({
           <div className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-2 rounded-2xl border border-white/20 bg-zinc-950/55 px-2.5 py-1 text-white shadow-lg backdrop-blur-md">
             {/* In-HUD Home Button (rotates with landscape game!) */}
             <Link
-              href="/"
+              href="/?tab=game"
               aria-label="Về trang chủ"
               title="Về nhà"
               className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full border border-pink-300/50 bg-white/15 text-sm shadow hover:bg-white/25 active:scale-95"
