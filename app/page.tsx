@@ -3,6 +3,7 @@
 import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
+import { useMe, resetMeCache } from "@/lib/useMe";
 
 type TabType = "love-story" | "game";
 
@@ -10,6 +11,7 @@ function HomeMenu() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const tabParam = searchParams.get("tab");
+  const who = useMe();
 
   // Single source of truth derived directly during render — Game 🎮 is default
   const activeTab: TabType = tabParam === "love-story" ? "love-story" : "game";
@@ -19,14 +21,35 @@ function HomeMenu() {
     router.replace(newUrl, { scroll: false });
   };
 
+  const handleLogout = async () => {
+    await fetch("/api/logout", { method: "POST" });
+    resetMeCache();
+    router.push("/lock");
+  };
+
   return (
     <div className="flex w-full flex-col items-center gap-6">
+      {/* Identity Badge & Switch User */}
+      {who && (
+        <div className="flex items-center gap-2 rounded-full border border-pink-200/80 bg-white/80 px-3.5 py-1 text-xs text-zinc-600 shadow-xs backdrop-blur animate-in fade-in">
+          <span>Đang mở: {who === "nam" ? "Anh 🐻" : "Em 🧸"}</span>
+          <span className="text-pink-300">·</span>
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="font-semibold text-pink-500 hover:text-pink-700 active:scale-95 transition-all cursor-pointer"
+          >
+            Đổi người 🔒
+          </button>
+        </div>
+      )}
+
       {/* Master Tabs Switcher */}
       <div className="flex w-full max-w-xs rounded-full border border-pink-200 bg-pink-100/70 p-1.5 shadow-inner backdrop-blur">
         <button
           type="button"
           onClick={() => handleTabChange("game")}
-          className={`flex-1 rounded-full py-2.5 text-center text-sm font-bold transition-all active:scale-95 ${
+          className={`flex-1 rounded-full py-2.5 text-center text-sm font-bold transition-all active:scale-95 cursor-pointer ${
             activeTab === "game"
               ? "bg-white text-pink-600 shadow-md shadow-pink-200/50"
               : "text-pink-400 hover:text-pink-600"
@@ -37,7 +60,7 @@ function HomeMenu() {
         <button
           type="button"
           onClick={() => handleTabChange("love-story")}
-          className={`flex-1 rounded-full py-2.5 text-center text-sm font-bold transition-all active:scale-95 ${
+          className={`flex-1 rounded-full py-2.5 text-center text-sm font-bold transition-all active:scale-95 cursor-pointer ${
             activeTab === "love-story"
               ? "bg-white text-pink-600 shadow-md shadow-pink-200/50"
               : "text-pink-400 hover:text-pink-600"
@@ -47,7 +70,37 @@ function HomeMenu() {
         </button>
       </div>
 
-      {/* Tab 1: Love Story Content */}
+      {/* Tab 1: Game Content (Default) */}
+      {activeTab === "game" && (
+        <div className="flex w-full max-w-md flex-col gap-3 animate-in fade-in duration-200">
+          <Link
+            href="/game"
+            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
+          >
+            Lật hình emoji 🐻
+          </Link>
+          <Link
+            href="/scrabble"
+            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
+          >
+            Scrabble with Love 💌
+          </Link>
+          <Link
+            href="/caro"
+            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
+          >
+            Cờ caro 🐻🧸
+          </Link>
+          <Link
+            href="/tank"
+            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
+          >
+            Bắn tăng 💥
+          </Link>
+        </div>
+      )}
+
+      {/* Tab 2: Love Story Content */}
       {activeTab === "love-story" && (
         <div className="flex w-full max-w-md flex-col gap-3 animate-in fade-in duration-200">
           <Link
@@ -96,36 +149,6 @@ function HomeMenu() {
           </div>
         </div>
       )}
-
-      {/* Tab 2: Game Content */}
-      {activeTab === "game" && (
-        <div className="flex w-full max-w-md flex-col gap-3 animate-in fade-in duration-200">
-          <Link
-            href="/game"
-            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
-          >
-            Lật hình emoji 🐻
-          </Link>
-          <Link
-            href="/scrabble"
-            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
-          >
-            Scrabble with Love 💌
-          </Link>
-          <Link
-            href="/caro"
-            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
-          >
-            Cờ caro 🐻🧸
-          </Link>
-          <Link
-            href="/tank"
-            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
-          >
-            Bắn tăng 💥
-          </Link>
-        </div>
-      )}
     </div>
   );
 }
@@ -133,6 +156,7 @@ function HomeMenu() {
 function HomeFallback() {
   return (
     <div className="flex w-full max-w-md flex-col items-center gap-3">
+      <div className="h-7 w-48 animate-pulse rounded-full bg-pink-100" />
       <div className="h-12 w-64 animate-pulse rounded-full bg-pink-100" />
       <div className="h-14 w-full animate-pulse rounded-full bg-pink-200" />
       <div className="h-14 w-full animate-pulse rounded-full bg-pink-100" />

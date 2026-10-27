@@ -1,0 +1,93 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: every client (browser & server rate-limiter) must be signed in
+    // via Firebase Authentication (Anonymous Auth or Custom Token).
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. Journal ("Nhật ký tình yêu") — CRITICAL USER DATA
+    //    SAFETY RULE: Never allow deleting journal entries from client SDKs.
+    // -------------------------------------------------------------------------
+    match /journal/{postId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.author is string
+        && request.resource.data.date is string
+        && request.resource.data.hearts is int
+        && (
+          (request.resource.data.body is string && request.resource.data.title is string)
+          || (request.resource.data.message is string && request.resource.data.message.size() > 0)
+        );
+      allow update: if isSignedIn()
+        && request.resource.data.hearts is int
+        && (
+          (request.resource.data.body is string && request.resource.data.title is string)
+          || (request.resource.data.message is string && request.resource.data.message.size() > 0)
+        );
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Unlock Rate Limiter ("unlock_attempts")
+    //    Global counter doc ("global") must never be deleted.
+    //    Per-IP docs ("ip_<32-hex-sha256>") can be created/updated/deleted.
+    // -------------------------------------------------------------------------
+    match /unlock_attempts/{docId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && request.resource.data.count is int
+        && request.resource.data.windowStart is int
+        && request.resource.data.lockedUntil is int;
+      allow delete: if isSignedIn()
+        && docId != "global"
+        && docId.matches('^ip_[0-9a-f]{32}$');
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Love Story Collections: foods, shop_prefs, todos, wishlist, trips
+    // -------------------------------------------------------------------------
+    match /foods/{foodId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /shop_prefs/{prefId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /todos/{todoId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /wishlist/{wishId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /trips/{tripId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Mini-Games Collections: memory_game, scrabble_game, caro_game, tank_game
+    // -------------------------------------------------------------------------
+    match /memory_game/{roomId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /scrabble_game/{roomId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /caro_game/{roomId} {
+      allow read, write: if isSignedIn();
+    }
+
+    match /tank_game/{roomId} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}

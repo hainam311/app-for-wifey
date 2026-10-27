@@ -67,6 +67,64 @@ function bump(c: Counter | undefined, now: number, max: number, windowMs: number
   return { count, windowStart, lockedUntil };
 }
 
+export type UnlockAttemptResult =
+  | { locked: true; retryAfterSec: number }
+  | { locked: false };
+
+// Single atomic transaction for POST /api/unlock: checks lock state and either
+// clears IP failures (on success) or increments IP + global counters (on failure)
+// in one Firestore round-trip.
+export async function attemptUnlock(
+  ip: string,
+  isSuccess: boolean
+): Promise<UnlockAttemptResult> {
+  const db = await limiterDb();
+  const now = Date.now();
+  const ipRef = doc(db, COLLECTION, ipDocId(ip));
+  const globalRef = doc(db, COLLECTION, GLOBAL_DOC);
+
+  return runTransaction(db, async (tx) => {
+    const [ipSnap, globalSnap] = await Promise.all([
+      tx.get(ipRef),
+      tx.get(globalRef),
+    ]);
+    const ipData = ipSnap.data() as Counter | undefined;
+    const globalData = globalSnap.data() as Counter | undefined;
+
+    const lockedUntil = Math.max(
+      ipData?.lockedUntil ?? 0,
+      globalData?.lockedUntil ?? 0
+    );
+    if (lockedUntil > now) {
+      return {
+        locked: true as const,
+        retryAfterSec: Math.max(1, Math.ceil((lockedUntil - now) / 1000)),
+      };
+    }
+
+    if (isSuccess) {
+      if (ipSnap.exists()) {
+        tx.delete(ipRef);
+      }
+      return { locked: false as const };
+    }
+
+    const ipNext = bump(ipData, now, IP_MAX, IP_WINDOW_MS);
+    const globalNext = bump(globalData, now, GLOBAL_MAX, GLOBAL_WINDOW_MS);
+    tx.set(ipRef, ipNext);
+    tx.set(globalRef, globalNext);
+
+    const newUntil = Math.max(ipNext.lockedUntil, globalNext.lockedUntil);
+    if (newUntil > now) {
+      return {
+        locked: true as const,
+        retryAfterSec: Math.max(1, Math.ceil((newUntil - now) / 1000)),
+      };
+    }
+    return { locked: false as const };
+  });
+}
+
 // Milliseconds left on the longer of the IP/global locks; 0 = free to try.
 export async function lockRemaining(ip: string): Promise<number> {
   const db = await limiterDb();

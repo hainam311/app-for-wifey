@@ -170,6 +170,13 @@ def extract_drinks(z, shared, rid_target, sheet_rid):
     return drinks
 
 # ---------- TRIPS ----------
+PLACE_CITY_OVERRIDES = {
+    "CF muối": "Huế",
+    "Cù Lao Chàm": "Hội An",
+    "Đồng Văn": "Hà Giang",
+    "Lũng Cú": "Hà Giang",
+}
+
 def extract_trips(z, shared, rid_target, sheet_rid):
     if "Dự định đi" not in sheet_rid:
         return []
@@ -177,15 +184,37 @@ def extract_trips(z, shared, rid_target, sheet_rid):
     if not grid:
         return []
     header = grid[0]
+    # Forward-fill city names across header columns (and track current_city across rows)
+    resolved_header = []
+    current_city = ""
+    for cell in header:
+        c_str = str(cell).strip()
+        if c_str and c_str != "0":
+            current_city = c_str
+        resolved_header.append(current_city)
+
     trips = []
+    row_city = ""
     for row in grid[1:]:
-        for c, city in enumerate(header):
+        first_col = str(row[0]).strip() if len(row) > 0 else ""
+        if first_col and first_col != "0":
+            row_city = first_col
+        for c, raw_city in enumerate(header):
             place_col = c * 2
             went_col = c * 2 + 1
             place = str(row[place_col]).strip() if place_col < len(row) else ""
             went_raw = str(row[went_col]).strip() if went_col < len(row) else ""
             if place in ("", "0"):
                 continue
+            city = str(raw_city).strip()
+            if not city:
+                city = (
+                    PLACE_CITY_OVERRIDES.get(place)
+                    or (resolved_header[c] if c < len(resolved_header) else "")
+                    or row_city
+                )
+            else:
+                city = PLACE_CITY_OVERRIDES.get(place, city)
             trips.append({
                 "city": city,
                 "place": place,

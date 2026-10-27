@@ -61,14 +61,21 @@ export default function DrinkPrefsPage() {
     authReady.then(() => {
       if (cancelled) return;
       const q = query(collection(db, "shop_prefs"), orderBy("sortOrder", "asc"));
-      unsubscribe = onSnapshot(q, (snapshot) => {
-        const items = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<ShopPref, "id">),
-        }));
-        setPrefs(items);
-        setLoading(false);
-      });
+      unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const items = snapshot.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<ShopPref, "id">),
+          }));
+          setPrefs(items);
+          setLoading(false);
+        },
+        (err) => {
+          console.error("DrinkPrefs onSnapshot error:", err);
+          setLoading(false);
+        }
+      );
     });
     return () => {
       cancelled = true;

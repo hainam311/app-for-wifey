@@ -7,8 +7,12 @@ export type { Who };
 // One request per page load, shared by every component that asks.
 let mePromise: Promise<Who | null> | null = null;
 
+export function resetMeCache() {
+  mePromise = null;
+}
+
 function fetchMe(): Promise<Who | null> {
-  mePromise ??= fetch("/api/me")
+  mePromise ??= fetch("/api/me", { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : { who: null }))
     .then((d: { who: Who | null }) => d.who)
     .catch(() => null);
