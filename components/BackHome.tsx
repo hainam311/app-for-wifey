@@ -12,12 +12,15 @@ export default function BackHome() {
   )
     return null;
 
-  const isGameRoute =
-    pathname.startsWith("/game") ||
-    pathname.startsWith("/scrabble") ||
-    pathname.startsWith("/caro");
+  const isLoveStoryRoute =
+    pathname.startsWith("/food") ||
+    pathname.startsWith("/drink-prefs") ||
+    pathname.startsWith("/journal") ||
+    pathname.startsWith("/todo") ||
+    pathname.startsWith("/wishlist") ||
+    pathname.startsWith("/trips");
 
-  const href = isGameRoute ? "/?tab=game" : "/";
+  const href = isLoveStoryRoute ? "/?tab=love-story" : "/";
 
   return (
     <Link

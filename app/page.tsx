@@ -11,11 +11,11 @@ function HomeMenu() {
   const router = useRouter();
   const tabParam = searchParams.get("tab");
 
-  // Single source of truth derived directly during render — no cascading effects
-  const activeTab: TabType = tabParam === "game" ? "game" : "love-story";
+  // Single source of truth derived directly during render — Game 🎮 is default
+  const activeTab: TabType = tabParam === "love-story" ? "love-story" : "game";
 
   const handleTabChange = (newTab: TabType) => {
-    const newUrl = newTab === "game" ? "/?tab=game" : "/?tab=love-story";
+    const newUrl = newTab === "love-story" ? "/?tab=love-story" : "/?tab=game";
     router.replace(newUrl, { scroll: false });
   };
 
@@ -23,17 +23,6 @@ function HomeMenu() {
     <div className="flex w-full flex-col items-center gap-6">
       {/* Master Tabs Switcher */}
       <div className="flex w-full max-w-xs rounded-full border border-pink-200 bg-pink-100/70 p-1.5 shadow-inner backdrop-blur">
-        <button
-          type="button"
-          onClick={() => handleTabChange("love-story")}
-          className={`flex-1 rounded-full py-2.5 text-center text-sm font-bold transition-all active:scale-95 ${
-            activeTab === "love-story"
-              ? "bg-white text-pink-600 shadow-md shadow-pink-200/50"
-              : "text-pink-400 hover:text-pink-600"
-          }`}
-        >
-          Love Story ❤️
-        </button>
         <button
           type="button"
           onClick={() => handleTabChange("game")}
@@ -44,6 +33,17 @@ function HomeMenu() {
           }`}
         >
           Game 🎮
+        </button>
+        <button
+          type="button"
+          onClick={() => handleTabChange("love-story")}
+          className={`flex-1 rounded-full py-2.5 text-center text-sm font-bold transition-all active:scale-95 ${
+            activeTab === "love-story"
+              ? "bg-white text-pink-600 shadow-md shadow-pink-200/50"
+              : "text-pink-400 hover:text-pink-600"
+          }`}
+        >
+          Love Story ❤️
         </button>
       </div>
 
