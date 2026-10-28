@@ -517,6 +517,7 @@ export function fire(
   }
 
   // 1. Drive & update shooter tank facing/charge/last markers
+  const power = Math.round(aim.power);
   const fromX = drive(state.ground, myTank.x, aim.toX, MAX_FUEL);
   const facing: 1 | -1 = aim.facing === -1 ? -1 : 1;
   const shotsSinceSS =
@@ -532,7 +533,7 @@ export function fire(
     facing,
     shotsSinceSS,
     lastAngle: aim.angle,
-    lastPower: Math.round(aim.power),
+    lastPower: power,
   };
 
   // 2. Simulate shell flight
@@ -541,7 +542,7 @@ export function fire(
     movedTanks,
     me,
     aim.angle,
-    aim.power,
+    power,
     state.wind
   );
 
@@ -572,7 +573,7 @@ export function fire(
     kind: aim.kind,
     fromX,
     angle: aim.angle,
-    power: Math.round(aim.power),
+    power,
     wind: state.wind,
     path: sim.path,
     damage,

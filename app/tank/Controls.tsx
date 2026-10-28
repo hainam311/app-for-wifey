@@ -42,12 +42,19 @@ export default function Controls({
   const chargeStartRef = useRef<number | null>(null);
   const chargeRafRef = useRef<number>(0);
   const currentPowerRef = useRef<number>(aim.power);
+  const aimRef = useRef<Aim>(aim);
   const manualPowerRef = useRef<boolean>(false);
   const fuelLeftRef = useRef<number>(fuelLeft);
+  const onFireRef = useRef<(power: number) => void>(onFire);
 
   useEffect(() => {
+    aimRef.current = aim;
     currentPowerRef.current = aim.power;
-  }, [aim.power]);
+  }, [aim]);
+
+  useEffect(() => {
+    onFireRef.current = onFire;
+  }, [onFire]);
 
   useEffect(() => {
     fuelLeftRef.current = fuelLeft;
@@ -108,15 +115,33 @@ export default function Controls({
     chargeStartRef.current = t0;
     setCharging(true);
 
+    // If not using a previously set manual power, start charging predictably at 0
+    if (!manualPowerRef.current) {
+      currentPowerRef.current = 0;
+      onChangeAim((prev) => ({ ...prev, power: 0 }));
+      playCharge(0);
+    }
+
     const tick = (now: number) => {
       if (chargeStartRef.current === null) return;
-      const elapsedSec = (now - chargeStartRef.current) / 1000;
+      const heldMs = now - chargeStartRef.current;
+      // If user had manually chosen power on the bar, only override it after a deliberate long press (>200ms)
+      if (manualPowerRef.current && heldMs < 200) {
+        chargeRafRef.current = requestAnimationFrame(tick);
+        return;
+      }
+      manualPowerRef.current = false;
+
+      const elapsedSec = heldMs / 1000;
+      // Steady 2.0s per sweep: 0 -> 100 in 2s, 100 -> 0 in 2s
       const cycle = elapsedSec % 4;
       const rawPower = cycle <= 2 ? cycle * 50 : (4 - cycle) * 50;
-      const p = Math.max(1, Math.min(100, Math.round(rawPower)));
-      currentPowerRef.current = p;
-      playCharge(p);
-      onChangeAim((prev) => ({ ...prev, power: p }));
+      const p = Math.max(0, Math.min(100, Math.round(rawPower)));
+      if (p !== currentPowerRef.current) {
+        currentPowerRef.current = p;
+        playCharge(p);
+        onChangeAim((prev) => ({ ...prev, power: p }));
+      }
       chargeRafRef.current = requestAnimationFrame(tick);
     };
     chargeRafRef.current = requestAnimationFrame(tick);
@@ -131,13 +156,11 @@ export default function Controls({
     setCharging(false);
 
     if (!playable) return;
-    let finalPower = currentPowerRef.current;
-    if (heldMs < 90 && manualPowerRef.current && aim.power > 0) {
-      finalPower = aim.power;
-    } else {
-      const cycle = (heldMs / 1000) % 4;
-      const rawPower = cycle <= 2 ? cycle * 50 : (4 - cycle) * 50;
-      finalPower = Math.max(5, Math.min(100, Math.round(rawPower)));
+
+    // Zero-delay release: use exact power at the instant of release (clamped 0..100)
+    let finalPower = Math.max(0, Math.min(100, currentPowerRef.current));
+    if (heldMs < 200 && manualPowerRef.current && aimRef.current.power >= 0) {
+      finalPower = Math.max(0, Math.min(100, aimRef.current.power));
     }
     manualPowerRef.current = false;
 
@@ -149,9 +172,9 @@ export default function Controls({
         // Safe fallback
       }
     }
-    playShot(aim.kind);
-    onFire(finalPower);
-  }, [aim.kind, aim.power, onFire, playable]);
+    playShot(aimRef.current.kind);
+    onFireRef.current(finalPower);
+  }, [playable]);
 
   useEffect(() => {
     return () => {
@@ -247,7 +270,9 @@ export default function Controls({
           </div>
 
           <div
-            className="h-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 transition-[width] duration-75"
+            className={`h-full bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 ${
+              charging ? "transition-none" : "transition-[width] duration-75"
+            }`}
             style={{ width: `${aim.power}%` }}
           />
 

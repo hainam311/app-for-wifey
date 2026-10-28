@@ -275,9 +275,46 @@ function TankGame({
       if (!playable) return;
       setShowPicker(false);
       const shotAim: Aim = { ...aim, power };
-      run((s) => fire(s, me, shotAim, Math.random));
+
+      // OPTIMISTIC ZERO-DELAY SHOT: Calculate trajectory immediately at 0ms on release
+      const optimistic = fire(game, me, shotAim, Math.random);
+      if (!optimistic.ok) {
+        say(optimistic.reason);
+        return;
+      }
+
+      const nextState = optimistic.state;
+      const shot = nextState.lastShot;
+      if (shot) {
+        seenShotNRef.current = shot.n;
+        setQueue((q) => [
+          ...q,
+          {
+            shot,
+            preGround: game.ground,
+            preTanks: game.tanks,
+            postGround: nextState.ground,
+            postTanks: nextState.tanks,
+            skipDrive: true,
+          },
+        ]);
+        setAim(defaultAimFor(nextState, me));
+        setFuelLeft(MAX_FUEL);
+        prevStateRef.current = nextState;
+      }
+
+      // Sync to Firestore in background without blocking local playback
+      run((remoteSnap) => {
+        if (
+          remoteSnap.gameId === game.gameId &&
+          (remoteSnap.lastShot?.n ?? 0) === (game.lastShot?.n ?? 0)
+        ) {
+          return { ok: true, state: nextState };
+        }
+        return fire(remoteSnap, me, shotAim, Math.random);
+      });
     },
-    [aim, me, playable, run]
+    [aim, game, me, playable, run, say]
   );
 
   const handlePlaybackDone = useCallback((shotN: number) => {
