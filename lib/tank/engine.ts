@@ -24,49 +24,70 @@ export type MobileId =
   | "turtle"
   | "unicorn";
 
-export const MOBILES: ReadonlyArray<{
+export type MobileSpec = {
   id: MobileId;
   name: string;
   subtitle: string;
   sprite: string;
-}> = [
+  defense: number;
+  windFactor?: number;
+  fuelBonus?: number;
+};
+
+export const MOBILES: ReadonlyArray<MobileSpec> = [
   {
     id: "armor",
     name: "Armor Bear",
     subtitle: "Đại bác hạng nặng",
     sprite: "/tanks/samples/01-armor-bear.png",
+    defense: 1.05,
+    windFactor: 0.95,
   },
   {
     id: "mage",
     name: "Mage Hover",
     subtitle: "Đĩa bay pha lê",
     sprite: "/tanks/samples/02-mage-hover.png",
+    defense: 0.95,
+    windFactor: 1.1,
   },
   {
     id: "dragon",
     name: "Baby Dragon",
     subtitle: "Rồng lửa GunBound",
     sprite: "/tanks/samples/03-baby-dragon.png",
+    defense: 1.0,
+    windFactor: 1.0,
   },
   {
     id: "spider",
     name: "Nak Spider",
     subtitle: "Nhện máy Plasma",
     sprite: "/tanks/samples/04-spider-mecha.png",
+    defense: 1.0,
+    fuelBonus: 20,
   },
   {
     id: "turtle",
     name: "Turtle Cannon",
     subtitle: "Rùa thần công",
     sprite: "/tanks/samples/05-turtle-cannon.png",
+    defense: 1.1,
+    fuelBonus: -20,
   },
   {
     id: "unicorn",
     name: "Unicorn Cloud",
     subtitle: "Mây kỳ lân hồng",
     sprite: "/tanks/samples/06-pink-cloud-unicorn.png",
+    defense: 0.98,
+    windFactor: 1.05,
   },
 ];
+
+const MOBILE_BY_ID: Record<MobileId, MobileSpec> = Object.fromEntries(
+  MOBILES.map((m) => [m.id, m])
+) as Record<MobileId, MobileSpec>;
 
 export const DEFAULT_MOBILE: Record<Player, MobileId> = {
   nam: "armor",
@@ -223,13 +244,16 @@ export function nextGame(
   });
 }
 
-// Choose or switch your GunBound mobile for the match.
+// Choose or switch your GunBound mobile for the match (only before the first shot).
 export function chooseMobile(
   state: TankState,
   me: Player,
   mobile: MobileId,
   now = Date.now()
 ): StateResult {
+  if ((state.lastShot?.n ?? 0) > 0) {
+    return { ok: false, reason: "Đã vào trận rồi, không thể đổi xe nha 💕" };
+  }
   if (!MOBILES.some((m) => m.id === mobile)) {
     return { ok: false, reason: "Xe này không hợp lệ 🤔" };
   }
@@ -334,7 +358,7 @@ export function simulateShot(
     x += vx * DT;
     y += vy * DT;
 
-    if (step % 2 === 0) {
+    if (step % 4 === 0) {
       path.push(Math.round(x), Math.round(y));
     }
 
@@ -433,7 +457,9 @@ export function explode(
     const rawD = Math.hypot(t.x - boom.x, ty - boom.y);
     const d = boom.directHit === p ? 0 : rawD;
     if (d < radius + TANK_R) {
-      const dmg = Math.floor(maxDamage * (1 - (0.5 * d) / (radius + TANK_R)));
+      const rawDmg = maxDamage * (1 - (0.5 * d) / (radius + TANK_R));
+      const def = t.mobile ? (MOBILE_BY_ID[t.mobile]?.defense ?? 1) : 1;
+      const dmg = Math.floor(rawDmg / def);
       damage[p] = dmg;
       t.hp = Math.max(0, t.hp - dmg);
       if (t.hp === 0) {

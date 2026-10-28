@@ -87,7 +87,11 @@ service cloud.firestore {
     }
 
     match /tank_game/{roomId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn()
+        && request.resource.data.ground is list
+        && request.resource.data.ground.size() == 300;
+      allow delete: if false;
     }
   }
 }

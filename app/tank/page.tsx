@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { onSnapshot, runTransaction } from "firebase/firestore";
 import { authReady, db } from "@/lib/firebase";
 import { useMe } from "@/lib/useMe";
+import { isMuted, onMuteChange, playDefeat, playWin, toggleMute } from "@/lib/tank/audio";
 import { gameRef } from "@/lib/tank/gameDoc";
 import Field, { type ShotPlayback } from "./Field";
 import Controls from "./Controls";
@@ -45,8 +46,15 @@ function defaultAimFor(state: TankState, who: Player): Aim {
 }
 
 function windLabel(wind: number): string {
-  if (wind === 0) return "🌬️ 0";
-  return wind > 0 ? `🌬️ → ${wind}` : `🌬️ ← ${Math.abs(wind)}`;
+  if (wind === 0) return "🌬️ Đứng gió 0";
+  const abs = Math.abs(wind);
+  const chevrons = abs >= 7 ? ">>>" : abs >= 4 ? ">>" : ">";
+  if (wind > 0) {
+    return `🌬️ Gió +${abs} ${chevrons}`;
+  } else {
+    const leftChevrons = abs >= 7 ? "<<<" : abs >= 4 ? "<<" : "<";
+    return `${leftChevrons} Gió -${abs} 🌬️`;
+  }
 }
 
 function endText(game: TankState): string {
@@ -148,6 +156,8 @@ function TankGame({
   );
   const [pickerPlayer, setPickerPlayer] = useState<Player>(me);
   const [isPortrait, setIsPortrait] = useState<boolean>(false);
+  const muted = useSyncExternalStore(onMuteChange, isMuted, () => false);
+  const hasPlayedEndAudioRef = useRef<number | null>(null);
 
   useEffect(() => {
     const updateOrientation = () => {
@@ -200,6 +210,18 @@ function TankGame({
   const displayWind = activePlayback ? activePlayback.shot.wind : game.wind;
 
   const showOver = game.status === "over" && !activePlayback;
+
+  useEffect(() => {
+    if (showOver && game && hasPlayedEndAudioRef.current !== game.gameId) {
+      hasPlayedEndAudioRef.current = game.gameId;
+      if (game.winner === me || (hotseat && game.winner)) {
+        playWin();
+      } else if (game.winner && game.winner !== me) {
+        playDefeat();
+      }
+    }
+  }, [game, hotseat, me, showOver]);
+
   const playing = game.status === "playing" && !activePlayback;
   const myTurn = playing && game.turn === me;
   const playable = myTurn && !busy;
@@ -323,17 +345,34 @@ function TankGame({
         </div>
 
         {/* TOP HUD OVERLAY (inside the game window) */}
-        <div className="pointer-events-none relative z-10 flex flex-col gap-1 px-2.5 pt-2 sm:px-3.5 sm:pt-2.5">
+        <div
+          className={`pointer-events-none relative z-10 flex flex-col gap-1 px-2.5 pt-2 sm:px-3.5 sm:pt-2.5 ${
+            isPortrait
+              ? "pl-[max(0.75rem,env(safe-area-inset-top))] pr-[max(0.75rem,env(safe-area-inset-bottom))]"
+              : ""
+          }`}
+        >
           <div className="grid grid-cols-[auto_1fr_auto_1fr] items-center gap-2 rounded-2xl border border-white/20 bg-zinc-950/55 px-2.5 py-1 text-white shadow-lg backdrop-blur-md">
-            {/* In-HUD Home Button (rotates with landscape game!) */}
-            <Link
-              href="/?tab=game"
-              aria-label="Về trang chủ"
-              title="Về nhà"
-              className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full border border-pink-300/50 bg-white/15 text-sm shadow hover:bg-white/25 active:scale-95"
-            >
-              🏠
-            </Link>
+            {/* In-HUD Home Button & Mute Toggle (rotates with landscape game!) */}
+            <div className="flex items-center gap-1.5">
+              <Link
+                href="/?tab=game"
+                aria-label="Về trang chủ"
+                title="Về nhà"
+                className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full border border-pink-300/50 bg-white/15 text-sm shadow hover:bg-white/25 active:scale-95"
+              >
+                🏠
+              </Link>
+              <button
+                type="button"
+                aria-label={muted ? "Bật âm thanh" : "Tắt âm thanh"}
+                title={muted ? "Bật âm thanh" : "Tắt âm thanh"}
+                onClick={() => toggleMute()}
+                className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full border border-pink-300/50 bg-white/15 text-xs shadow hover:bg-white/25 active:scale-95"
+              >
+                {muted ? "🔇" : "🔊"}
+              </button>
+            </div>
 
             {/* Nam HP */}
             <div className="flex flex-col gap-0.5">
@@ -356,25 +395,35 @@ function TankGame({
             {/* Center: Wind + Change Mobile + Turn Badge + Resign icon */}
             <div className="pointer-events-auto flex flex-col items-center gap-0.5 px-1">
               <div className="flex items-center gap-1.5">
-                {!showOver && (
-                  <button
-                    type="button"
-                    data-testid="open-picker-btn"
-                    title="Đổi xe GunBound"
-                    disabled={busy || !!activePlayback}
-                    onClick={() => {
-                      setPickerPlayer(me);
-                      setShowPicker((v) => !v);
-                    }}
-                    className="rounded-full border border-amber-300/45 bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-200 hover:bg-amber-500/35 disabled:opacity-40"
-                  >
-                    🚗 Đổi xe
-                  </button>
-                )}
+                {!showOver &&
+                  ((game.lastShot?.n ?? 0) === 0 ? (
+                    <button
+                      type="button"
+                      data-testid="open-picker-btn"
+                      title="Đổi xe GunBound"
+                      disabled={busy || !!activePlayback}
+                      onClick={() => {
+                        setPickerPlayer(me);
+                        setShowPicker((v) => !v);
+                      }}
+                      className="rounded-full border border-amber-300/45 bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-200 hover:bg-amber-500/35 disabled:opacity-40"
+                    >
+                      🚗 Đổi xe
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      title="Đã vào trận, không thể đổi xe nha 🐻"
+                      className="cursor-not-allowed rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-zinc-400 opacity-60"
+                    >
+                      🔒 Xe đã khóa
+                    </button>
+                  ))}
 
                 <span
                   data-testid="wind"
-                  className="rounded-full border border-sky-300/40 bg-sky-500/25 px-2.5 py-0.5 text-[11px] font-extrabold text-sky-200 sm:text-xs"
+                  className="rounded-full border border-sky-300/40 bg-sky-500/25 px-2.5 py-0.5 font-mono text-[11px] font-extrabold tracking-tight text-sky-200 sm:text-xs"
                 >
                   {windLabel(displayWind)}
                 </span>
@@ -547,7 +596,13 @@ function TankGame({
         )}
 
         {/* BOTTOM HUD OVERLAY (Controls inside the game window) */}
-        <div className="pointer-events-none relative z-10 p-2 sm:p-3">
+        <div
+          className={`pointer-events-none relative z-10 p-2 sm:p-3 ${
+            isPortrait
+              ? "pl-[max(0.75rem,env(safe-area-inset-top))] pr-[max(0.75rem,env(safe-area-inset-bottom))]"
+              : ""
+          }`}
+        >
           <Controls
             ground={displayGround}
             myTank={myTank}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { playBoom } from "@/lib/tank/audio";
 import {
   COLS,
   COL_W,
@@ -414,6 +415,17 @@ export default function Field({
             // Spawn flying dirt & spark particles once at explosion start
             if (spawnedDebrisForN !== shot.n) {
               spawnedDebrisForN = shot.n;
+
+              // Audio boom & mobile haptics on explosion impact
+              playBoom(shot.kind);
+              if (typeof navigator !== "undefined" && navigator.vibrate) {
+                try {
+                  navigator.vibrate([40, 30, 80]);
+                } catch {
+                  // Safe fallback
+                }
+              }
+
               const count = shot.kind === "ss" ? 28 : 20;
               for (let k = 0; k < count; k++) {
                 const ang = (Math.PI * k) / count + (k % 3) * 0.18;
@@ -668,6 +680,31 @@ export default function Field({
       }
       ctx.stroke();
 
+      // --- 2b. Ghost Trajectory Trail of Previous Shot ---
+      const ghostPath = curState.lastShot?.path;
+      if (!pb && ghostPath && ghostPath.length >= 4) {
+        ctx.save();
+        ctx.setLineDash([4 * scaleX, 6 * scaleX]);
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+        ctx.lineWidth = Math.max(1.5, 2 * scaleX);
+        ctx.beginPath();
+        ctx.moveTo(wx(ghostPath[0]), wy(ghostPath[1]));
+        for (let i = 2; i < ghostPath.length; i += 2) {
+          ctx.lineTo(wx(ghostPath[i]), wy(ghostPath[i + 1]));
+        }
+        ctx.stroke();
+
+        if (curState.lastShot?.boom) {
+          const bx = wx(curState.lastShot.boom.x);
+          const by = wy(curState.lastShot.boom.y);
+          ctx.beginPath();
+          ctx.arc(bx, by, 5 * scaleX, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
       // --- 3a. Movement trails (dust, exhaust smoke, sparkles) behind the mobiles ---
       const liveTrail: TrailParticle[] = [];
       for (const q of trailRef.current) {
@@ -904,6 +941,25 @@ export default function Field({
           ctx.moveTo(cx + dirX * 22 * scaleX, cy - 6 * scaleY - dirY * 22 * scaleY);
           ctx.lineTo(cx + dirX * 78 * scaleX, cy - 6 * scaleY - dirY * 78 * scaleY);
           ctx.stroke();
+
+          // Subtle 3-dot initial launch vector preview biased by wind
+          ctx.setLineDash([]);
+          ctx.fillStyle = isNam
+            ? "rgba(254, 205, 211, 0.85)"
+            : "rgba(186, 230, 253, 0.85)";
+          const launchP = Math.max(20, curAim.power);
+          const launchSpd = launchP * 2.2;
+          const launchVx = dirX * launchSpd;
+          const launchVy = dirY * launchSpd;
+          for (let step = 1; step <= 3; step++) {
+            const dtPreview = step * 0.1;
+            const predX = tx + launchVx * dtPreview + 0.5 * activeWind * 2.5 * dtPreview * dtPreview;
+            const predY = ty + 6 + launchVy * dtPreview - 0.5 * 240 * dtPreview * dtPreview;
+            ctx.beginPath();
+            ctx.arc(wx(predX), wy(predY), (3 - step * 0.5) * scaleX, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
           ctx.restore();
         }
 

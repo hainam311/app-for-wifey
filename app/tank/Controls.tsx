@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { playCharge, playShot, stopCharge } from "@/lib/tank/audio";
 import {
   MAX_FUEL,
   SS_CHARGE,
@@ -114,6 +115,7 @@ export default function Controls({
       const rawPower = cycle <= 2 ? cycle * 50 : (4 - cycle) * 50;
       const p = Math.max(1, Math.min(100, Math.round(rawPower)));
       currentPowerRef.current = p;
+      playCharge(p);
       onChangeAim((prev) => ({ ...prev, power: p }));
       chargeRafRef.current = requestAnimationFrame(tick);
     };
@@ -125,6 +127,7 @@ export default function Controls({
     const heldMs = performance.now() - chargeStartRef.current;
     chargeStartRef.current = null;
     cancelAnimationFrame(chargeRafRef.current);
+    stopCharge();
     setCharging(false);
 
     if (!playable) return;
@@ -137,11 +140,24 @@ export default function Controls({
       finalPower = Math.max(5, Math.min(100, Math.round(rawPower)));
     }
     manualPowerRef.current = false;
+
+    // Mobile haptic vibration feedback on shot
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      try {
+        navigator.vibrate(20);
+      } catch {
+        // Safe fallback
+      }
+    }
+    playShot(aim.kind);
     onFire(finalPower);
-  }, [aim.power, onFire, playable]);
+  }, [aim.kind, aim.power, onFire, playable]);
 
   useEffect(() => {
-    return () => cancelAnimationFrame(chargeRafRef.current);
+    return () => {
+      cancelAnimationFrame(chargeRafRef.current);
+      stopCharge();
+    };
   }, []);
 
   // Keyboard controls (GunBound style)
