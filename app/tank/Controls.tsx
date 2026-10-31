@@ -4,8 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { playCharge, playShot, stopCharge } from "@/lib/tank/audio";
 import {
   MAX_FUEL,
+  MOBILE_BY_ID,
   SS_CHARGE,
   drive,
+  getMaxFuel,
+  getMobileTraits,
   type Aim,
   type ShotKind,
   type Tank,
@@ -61,6 +64,9 @@ export default function Controls({
   }, [fuelLeft]);
 
   const ssReady = myTank.shotsSinceSS >= SS_CHARGE;
+  const maxFuel = getMaxFuel(myTank.mobile);
+  const spec = myTank.mobile ? MOBILE_BY_ID[myTank.mobile] : undefined;
+  const traits = spec ? getMobileTraits(spec) : [];
 
   const stepDrive = useCallback(
     (dir: 1 | -1, step = 6) => {
@@ -239,6 +245,41 @@ export default function Controls({
 
   return (
     <div className="pointer-events-auto flex w-full flex-col gap-1 rounded-2xl border border-white/15 bg-zinc-950/65 px-2.5 py-1.5 text-white shadow-xl backdrop-blur-md sm:gap-1.5 sm:px-3.5 sm:py-2">
+      {/* Mobile Spec & Passive Trait Badges Header */}
+      {spec && (
+        <div
+          data-testid="passive-trait-badges"
+          className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px]"
+        >
+          <div className="flex items-center gap-1.5 truncate">
+            <span className="font-extrabold text-amber-300">{spec.name}</span>
+            <div className="flex flex-wrap items-center gap-1">
+              {traits.map((t, idx) => (
+                <span
+                  key={idx}
+                  data-testid={`trait-badge-${idx}`}
+                  className="rounded-full border border-amber-300/30 bg-amber-400/15 px-1.5 py-0.2 font-medium text-amber-200"
+                >
+                  {t}
+                </span>
+              ))}
+              {traits.length === 0 && (
+                <span className="rounded-full border border-white/15 bg-white/10 px-1.5 py-0.2 text-zinc-300">
+                  ⚖️ Cân bằng
+                </span>
+              )}
+            </div>
+          </div>
+          {myTank.lastPower > 0 && (
+            <div className="hidden shrink-0 items-center gap-1.5 text-[10px] text-zinc-300 sm:flex">
+              <span data-testid="last-angle">Trước: {myTank.lastAngle}°</span>
+              <span>·</span>
+              <span data-testid="last-power">Lực: {myTank.lastPower}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Power bar row (GunBound style gauge) */}
       <div className="flex items-center gap-2">
         <span className="shrink-0 text-[11px] font-bold tracking-wide text-amber-300 sm:text-xs">
@@ -324,7 +365,9 @@ export default function Controls({
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/50">
                 <div
                   className="h-full rounded-full bg-amber-400 transition-all"
-                  style={{ width: `${(fuelLeft / MAX_FUEL) * 100}%` }}
+                  style={{
+                    width: `${Math.min(100, Math.max(0, (fuelLeft / maxFuel) * 100))}%`,
+                  }}
                 />
               </div>
             </div>

@@ -16,17 +16,21 @@ import {
   drive,
   explode,
   fire,
+  getMaxFuel,
+  getMobileTraits,
   newGame,
   nextGame,
   other,
   resign,
   simulateShot,
+  type MobileId,
   type ShotKind,
   type Tank,
   type TankState,
   MOBILES,
 } from "../lib/tank/engine";
 import { MOTION, kick, newBody, smoothGround, stepBody, support } from "../lib/tank/motion";
+import { playFall } from "../lib/tank/audio";
 
 let failed = 0;
 let passed = 0;
@@ -62,7 +66,12 @@ function hasUndefinedOrNestedArray(val: unknown): boolean {
   return false;
 }
 
-function makeTestTank(x: number, facing: 1 | -1 = 1, hp = MAX_HP): Tank {
+function makeTestTank(
+  x: number,
+  facing: 1 | -1 = 1,
+  hp = MAX_HP,
+  mobile?: MobileId
+): Tank {
   return {
     x,
     hp,
@@ -71,6 +80,7 @@ function makeTestTank(x: number, facing: 1 | -1 = 1, hp = MAX_HP): Tank {
     alive: hp > 0,
     lastAngle: 45,
     lastPower: 0,
+    mobile,
   };
 }
 
@@ -525,6 +535,82 @@ function makeTestTank(x: number, facing: 1 | -1 = 1, hp = MAX_HP): Tank {
   );
 }
 
+// --- 17. Mobile attributes: windFactor and fuelBonus -------------------------
+{
+  // 17.1 windFactor: mage (windFactor 1.1) vs armor (windFactor 0.95) with wind = 10
+  const flat = Array<number>(COLS).fill(200);
+  const tanksMage = {
+    nam: makeTestTank(200, 1, MAX_HP, "mage"),
+    linh: makeTestTank(1100, -1, MAX_HP, "armor"),
+  };
+  const tanksArmor = {
+    nam: makeTestTank(200, 1, MAX_HP, "armor"),
+    linh: makeTestTank(1100, -1, MAX_HP, "mage"),
+  };
+
+  const simMage = simulateShot(flat, tanksMage, "nam", 45, 60, 10);
+  const simArmor = simulateShot(flat, tanksArmor, "nam", 45, 60, 10);
+
+  check(
+    `windFactor: mage (1.1) lands farther (${simMage.outcome === "hit" ? simMage.boom.x : 0}) than armor (0.95, ${simArmor.outcome === "hit" ? simArmor.boom.x : 0}) under wind 10`,
+    simMage.outcome === "hit" &&
+      simArmor.outcome === "hit" &&
+      simMage.boom.x > simArmor.boom.x
+  );
+
+  // Object ShotFrom with mobile property also respects windFactor
+  const simMageObj = simulateShot(flat, tanksMage, { x: 200, facing: 1, by: "nam", mobile: "mage" }, 45, 60, 10);
+  const simArmorObj = simulateShot(flat, tanksArmor, { x: 200, facing: 1, by: "nam", mobile: "armor" }, 45, 60, 10);
+  check(
+    "windFactor: ShotFrom object with mobile prop affects wind acceleration",
+    simMageObj.outcome === "hit" &&
+      simArmorObj.outcome === "hit" &&
+      simMageObj.boom.x > simArmorObj.boom.x
+  );
+
+  // 17.2 fuelBonus: spider (+20 -> 140px max) vs turtle (-20 -> 100px max)
+  check(
+    "getMaxFuel returns 140 for spider, 100 for turtle, 120 default",
+    getMaxFuel("spider") === 140 &&
+      getMaxFuel("turtle") === 100 &&
+      getMaxFuel("armor") === 120 &&
+      getMaxFuel() === 120
+  );
+
+  // Direct drive test from same starting position (x = 200) attempting to go 200px
+  const spiderDrive = drive(flat, 200, 400, getMaxFuel("spider"));
+  const turtleDrive = drive(flat, 200, 400, getMaxFuel("turtle"));
+  check(
+    "drive: spider moves max 140px (to 340) and turtle moves max 100px (to 300)",
+    spiderDrive === 340 && turtleDrive === 300
+  );
+
+  // fire() integration test: spider vs turtle from same position (x = 200)
+  const sSpider = newGame("nam", makeRng(301), undefined, 1000);
+  sSpider.ground = Array<number>(COLS).fill(200);
+  sSpider.tanks.nam = makeTestTank(200, 1, MAX_HP, "spider");
+  sSpider.tanks.linh = makeTestTank(1000, -1, MAX_HP, "turtle");
+  sSpider.wind = 0;
+  const resSpider = fire(sSpider, "nam", { toX: 500, facing: 1, angle: 45, power: 10, kind: "s1" });
+
+  const sTurtle = newGame("nam", makeRng(302), undefined, 1000);
+  sTurtle.ground = Array<number>(COLS).fill(200);
+  sTurtle.tanks.nam = makeTestTank(200, 1, MAX_HP, "turtle");
+  sTurtle.tanks.linh = makeTestTank(1000, -1, MAX_HP, "spider");
+  sTurtle.wind = 0;
+  const resTurtle = fire(sTurtle, "nam", { toX: 500, facing: 1, angle: 45, power: 10, kind: "s1" });
+
+  check(
+    "fire: spider reaches x=340 (+140) and turtle reaches x=300 (+100)",
+    resSpider.ok &&
+      resSpider.state.tanks.nam.x === 340 &&
+      resSpider.state.lastShot?.fromX === 340 &&
+      resTurtle.ok &&
+      resTurtle.state.tanks.nam.x === 300 &&
+      resTurtle.state.lastShot?.fromX === 300
+  );
+}
+
 // --- 18. chooseMobile updates player's mobile and nextGame preserves it ------
 {
   const g0 = newGame("linh", makeRng(99), undefined, 1000);
@@ -722,6 +808,32 @@ function makeTestTank(x: number, facing: 1 | -1 = 1, hp = MAX_HP): Tank {
     }
     check(`a mobile rolls smoothly over stepped ground (max ${maxJump.toFixed(2)} units per frame)`, maxJump < 1);
   }
+}
+
+// --- 21. Audio playFall & Mobile Passive Trait Badges -----------------------
+{
+  check("playFall is exported function", typeof playFall === "function");
+
+  const turtle = MOBILES.find((m) => m.id === "turtle")!;
+  const armor = MOBILES.find((m) => m.id === "armor")!;
+  const mage = MOBILES.find((m) => m.id === "mage")!;
+  const spider = MOBILES.find((m) => m.id === "spider")!;
+  const unicorn = MOBILES.find((m) => m.id === "unicorn")!;
+  const dragon = MOBILES.find((m) => m.id === "dragon")!;
+
+  const tTurtle = getMobileTraits(turtle);
+  const tArmor = getMobileTraits(armor);
+  const tMage = getMobileTraits(mage);
+  const tSpider = getMobileTraits(spider);
+  const tUnicorn = getMobileTraits(unicorn);
+  const tDragon = getMobileTraits(dragon);
+
+  check("Turtle traits: Giáp +10%, Xăng -20", tTurtle.includes("🛡️ Giáp +10%") && tTurtle.includes("⛽ Xăng -20"));
+  check("Armor Bear traits: Giáp +5%, Cản gió x0.95", tArmor.includes("🛡️ Giáp +5%") && tArmor.includes("🍃 Cản gió x0.95"));
+  check("Mage traits: Giáp -5%, Cản gió x1.1", tMage.includes("⚠️ Giáp -5%") && tMage.includes("🍃 Cản gió x1.1"));
+  check("Spider traits: Xăng +20", tSpider.includes("⛽ Xăng +20"));
+  check("Unicorn traits: Giáp -2%, Cản gió x1.05", tUnicorn.includes("⚠️ Giáp -2%") && tUnicorn.includes("🍃 Cản gió x1.05"));
+  check("Dragon has no penalty or bonus traits (balanced)", tDragon.length === 0);
 }
 
 console.log(`${passed} passed, ${failed} failed`);

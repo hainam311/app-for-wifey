@@ -17,6 +17,8 @@ import {
   chooseMobile,
   drive,
   fire,
+  getMaxFuel,
+  getMobileTraits,
   newGame,
   nextGame,
   other,
@@ -143,7 +145,9 @@ function TankGame({
   hotseat?: boolean;
 }) {
   const [aim, setAim] = useState<Aim>(() => defaultAimFor(game, me));
-  const [fuelLeft, setFuelLeft] = useState<number>(MAX_FUEL);
+  const [fuelLeft, setFuelLeft] = useState<number>(() =>
+    getMaxFuel(game.tanks[me]?.mobile)
+  );
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
   const [queue, setQueue] = useState<ShotPlayback[]>([]);
@@ -197,7 +201,7 @@ function TankGame({
         },
       ]);
       setAim(defaultAimFor(game, me));
-      setFuelLeft(MAX_FUEL);
+      setFuelLeft(getMaxFuel(game.tanks[me]?.mobile));
       setShowPicker(false);
     }
     prevStateRef.current = game;
@@ -266,8 +270,11 @@ function TankGame({
   const handleSelectMobile = useCallback(
     (who: Player, mobile: MobileId) => {
       run((s) => chooseMobile(s, who, mobile));
+      if (who === me) {
+        setFuelLeft(getMaxFuel(mobile));
+      }
     },
-    [run]
+    [me, run]
   );
 
   const handleFire = useCallback(
@@ -299,7 +306,7 @@ function TankGame({
           },
         ]);
         setAim(defaultAimFor(nextState, me));
-        setFuelLeft(MAX_FUEL);
+        setFuelLeft(getMaxFuel(nextState.tanks[me]?.mobile));
         prevStateRef.current = nextState;
       }
 
@@ -597,6 +604,16 @@ function TankGame({
                     <span className="hidden truncate text-[9px] text-zinc-300 sm:block">
                       {m.subtitle}
                     </span>
+                    <div className="mt-1 flex w-full flex-col gap-0.5">
+                      {getMobileTraits(m).map((t, idx) => (
+                        <span
+                          key={idx}
+                          className="truncate rounded bg-black/40 px-1 py-0.5 text-[8px] font-semibold text-amber-200 sm:text-[9px]"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
                   </button>
                 );
               })}

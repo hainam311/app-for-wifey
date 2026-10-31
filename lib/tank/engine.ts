@@ -85,7 +85,7 @@ export const MOBILES: ReadonlyArray<MobileSpec> = [
   },
 ];
 
-const MOBILE_BY_ID: Record<MobileId, MobileSpec> = Object.fromEntries(
+export const MOBILE_BY_ID: Record<MobileId, MobileSpec> = Object.fromEntries(
   MOBILES.map((m) => [m.id, m])
 ) as Record<MobileId, MobileSpec>;
 
@@ -157,6 +157,28 @@ export type StateResult = Result<{ state: TankState }>;
 
 export const MAX_HP = 1000;
 export const MAX_FUEL = 120;
+
+export function getMobileTraits(spec: MobileSpec): string[] {
+  const traits: string[] = [];
+  const defDelta = Math.round((spec.defense - 1) * 100);
+  if (defDelta > 0) {
+    traits.push(`🛡️ Giáp +${defDelta}%`);
+  } else if (defDelta < 0) {
+    traits.push(`⚠️ Giáp ${defDelta}%`);
+  }
+
+  if (spec.fuelBonus && spec.fuelBonus !== 0) {
+    traits.push(
+      `⛽ Xăng ${spec.fuelBonus > 0 ? `+${spec.fuelBonus}` : spec.fuelBonus}`
+    );
+  }
+
+  if (spec.windFactor && spec.windFactor !== 1) {
+    traits.push(`🍃 Cản gió x${spec.windFactor}`);
+  }
+
+  return traits;
+}
 export const MAX_SLOPE = 6;
 export const MIN_TANK_X = 10;
 export const MAX_TANK_X = WORLD_W - 10;
@@ -271,6 +293,11 @@ export function chooseMobile(
   return { ok: true, state: next };
 }
 
+export function getMaxFuel(mobile?: MobileId): number {
+  const spec = mobile ? MOBILES.find((m) => m.id === mobile) : undefined;
+  return MAX_FUEL + (spec?.fuelBonus ?? 0);
+}
+
 // Moves 1 unit per unit of fuel toward `toX`.
 // Stops at map edges (10..1190), holes (ground <= 0), slopes > 6 units/col, or 0 fuel.
 export function drive(
@@ -303,7 +330,13 @@ export function drive(
 
 export type ShotFrom =
   | Player
-  | { x: number; y?: number; facing: 1 | -1; by?: Player };
+  | {
+      x: number;
+      y?: number;
+      facing: 1 | -1;
+      by?: Player;
+      mobile?: MobileId;
+    };
 
 export type SimulationResult =
   | {
@@ -333,6 +366,12 @@ export function simulateShot(
       : (from.y ?? tankY(ground, from.x));
   const facing: 1 | -1 =
     typeof from === "string" ? tanks[from].facing : from.facing;
+  const mobileId =
+    typeof from === "string"
+      ? tanks[from].mobile
+      : (from.mobile ?? (shooterPlayer ? tanks[shooterPlayer].mobile : undefined));
+  const spec = mobileId ? MOBILES.find((m) => m.id === mobileId) : undefined;
+  const windFactor = spec?.windFactor ?? 1.0;
 
   const rad = (angle * Math.PI) / 180;
   const speed = power * SPEED_PER_POWER;
@@ -353,7 +392,7 @@ export function simulateShot(
   let leftShooter = shooterPlayer === undefined;
 
   for (let step = 1; step <= MAX_STEPS; step++) {
-    vx += wind * WIND_ACCEL * DT;
+    vx += wind * WIND_ACCEL * windFactor * DT;
     vy -= GRAVITY * DT;
     x += vx * DT;
     y += vy * DT;
@@ -518,7 +557,8 @@ export function fire(
 
   // 1. Drive & update shooter tank facing/charge/last markers
   const power = Math.round(aim.power);
-  const fromX = drive(state.ground, myTank.x, aim.toX, MAX_FUEL);
+  const maxFuel = getMaxFuel(myTank.mobile);
+  const fromX = drive(state.ground, myTank.x, aim.toX, maxFuel);
   const facing: 1 | -1 = aim.facing === -1 ? -1 : 1;
   const shotsSinceSS =
     aim.kind === "ss" ? 0 : myTank.shotsSinceSS + 1;

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { playBoom } from "@/lib/tank/audio";
+import { playBoom, playFall } from "@/lib/tank/audio";
 import {
   COLS,
   COL_W,
@@ -24,6 +24,7 @@ import {
   DEFAULT_MOBILE,
   MAX_HP,
   MOBILES,
+  simulateShot,
   type Aim,
   type LastShot,
   type MobileId,
@@ -59,6 +60,71 @@ type DebrisParticle = {
   bornAt: number;
   lifeMs: number;
 };
+
+type ChatBubble = {
+  id: number;
+  player: Player;
+  text: string;
+  bornAt: number;
+  lifeMs: number;
+};
+
+type RosePetal = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  rot: number;
+  rotSpd: number;
+  r: number;
+  color: string;
+  bornAt: number;
+  lifeMs: number;
+};
+
+const NAM_HIT_LINH = [
+  "Bách phát bách trúng nhé vợ yêu! 🎯",
+  "Trúng đích rồi, thương vợ lắm cơ mà luật chơi! ❤️",
+  "Một phát chuẩn chỉ tặng em bé! 😘",
+  "Đừng giận anh nha vợ ơi! 🌹",
+] as const;
+
+const LINH_REACT_HIT = [
+  "Á dám bắn em à, tối nay ra sofa ngủ! 😤",
+  "Anh Nam biết tay em lượt sau nhé! 💣",
+  "Huhu bắt nạt vợ là không tốt đâu nha! 😾",
+  "Giỏi lắm, chuẩn bị tinh thần đi anh! ⚡",
+] as const;
+
+const LINH_HIT_NAM = [
+  "Cho anh chừa thói láo nè! 💥",
+  "Còn cãi lời vợ nữa thôi anh Nam! 💅",
+  "Tối nay xác định rửa bát nhé cưng! 😼",
+  "Tay nghề em gái mưa nào bắn được thế này! 👑",
+] as const;
+
+const NAM_REACT_HIT = [
+  "Ui da đau quá vợ ơi tha anh! 🥺",
+  "Á tha anh vợ ơi, tối anh đấm lưng bù! 😭",
+  "Vợ bắn rát thế này ai chịu nổi! 💥",
+  "Em bắn hiểm thế, anh xin hàng! 🏳️",
+] as const;
+
+const NAM_MISS = [
+  "Gió to quá chứ anh ngắm chuẩn lắm... 💨",
+  "Hụt rồi, chắc do chuột giật! 😅",
+  "Anh cố tình bắn trượt nhường vợ đấy! 😉",
+] as const;
+
+const LINH_MISS = [
+  "Huhu đạn bay đi đâu mất tiêu rùi? 🛸",
+  "Gió vô duyên ghê á! 🌬️",
+  "Ủa kì cục ghê, rõ ràng ngắm chuẩn mà! 🙈",
+] as const;
+
+function pickCoupleText(list: readonly string[]): string {
+  return list[Math.floor(Math.random() * list.length)];
+}
 
 type TrailParticle = {
   kind: "dust" | "smoke" | "sparkle";
@@ -154,6 +220,9 @@ export default function Field({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const floatsRef = useRef<DamageFloat[]>([]);
   const debrisRef = useRef<DebrisParticle[]>([]);
+  const bubblesRef = useRef<ChatBubble[]>([]);
+  const bubbleIdCounter = useRef(0);
+  const petalsRef = useRef<RosePetal[]>([]);
   const motesRef = useRef<WindMote[]>([]);
   // Local visual motion of each mobile (lib/tank/motion.ts) and its trail
   const bodiesRef = useRef<Partial<Record<Player, MotionBody>>>({});
@@ -161,6 +230,24 @@ export default function Field({
   const trailDistRef = useRef<Record<Player, number>>({ nam: 0, linh: 0 });
   const spritesRef = useRef<Partial<Record<MobileId, HTMLImageElement>>>({});
   const draggingRef = useRef(false);
+  const ghostShotByPlayerRef = useRef<
+    Partial<
+      Record<
+        Player,
+        {
+          path: number[];
+          boom?: { x: number; y: number };
+        }
+      >
+    >
+  >({});
+  const lastGameIdRef = useRef(state.gameId);
+  if (lastGameIdRef.current !== state.gameId) {
+    lastGameIdRef.current = state.gameId;
+    ghostShotByPlayerRef.current = {};
+    bubblesRef.current = [];
+    petalsRef.current = [];
+  }
 
   // Keep latest props in a ref so the requestAnimationFrame loop never reads stale closures
   const latestRef = useRef({
@@ -216,6 +303,7 @@ export default function Field({
     let currentShotN: number | null = null;
     let completedShotN: number | null = null;
     let spawnedDebrisForN: number | null = null;
+    let playedFallForN: number | null = null;
     let recoilForN: number | null = null;
     let hitForN: number | null = null;
     let lastFrameTime = performance.now();
@@ -271,6 +359,7 @@ export default function Field({
       } | null = null;
       let shellTrail: number[] | null = null;
       let muzzleFlash: { x: number; y: number; alpha: number } | null = null;
+      let hitStopFlash: { x: number; y: number } | null = null;
       let boomCircle: {
         x: number;
         y: number;
@@ -287,12 +376,20 @@ export default function Field({
           playbackStart = now;
         }
         const shot = pb.shot;
+        // Cache this shot for player's ghost trajectory
+        ghostShotByPlayerRef.current[shot.by] = {
+          path: shot.path,
+          boom: shot.boom ? { x: shot.boom.x, y: shot.boom.y } : undefined,
+        };
+
         const startX = pb.preTanks[shot.by].x;
         const driveDist = pb.skipDrive ? 0 : Math.abs(shot.fromX - startX);
         const driveMs =
           driveDist > 0 ? Math.min(500, Math.max(180, driveDist * 4)) : 0;
         const numPoints = Math.floor(shot.path.length / 2);
         const flightMs = Math.max(160, (numPoints / 45) * 1000);
+        // Hit-stop: micro-freeze ~48ms right on impact before explosion expands
+        const hitStopMs = shot.boom ? 48 : 0;
         const boomMs = shot.boom ? 440 : 60;
         const elapsed = now - playbackStart;
 
@@ -343,15 +440,30 @@ export default function Field({
           shellTrail = shot.path.slice(0, (i0 + 1) * 2);
 
           // Recoil kick on the shooter once, at the start of the flight
+          // Phản lực lùi nòng/nhún thân xe theo hướng ngược lại vector bắn: -facing * (power / 100) * 12px
           if (recoilForN !== shot.n) {
             recoilForN = shot.n;
             const body = bodiesRef.current[shot.by];
             if (body) {
-              const strength = shot.kind === "ss" ? 1.6 : shot.kind === "s2" ? 1.2 : 1;
               const facing = drawTanks[shot.by].facing;
+              const powerRatio = Math.max(0.15, (shot.power ?? 50) / 100);
+              const kindMult =
+                shot.kind === "ss" ? 1.5 : shot.kind === "s2" ? 1.25 : 1.0;
+              const recoilDist = -facing * powerRatio * 12 * kindMult;
+              const shotRad = (shot.angle * Math.PI) / 180;
+              // Nhún thân xe (suspension compression downward from upward shell flight)
+              const liftKick = -Math.sin(shotRad) * 65 * powerRatio * kindMult;
+              // Pitch reaction kick
+              const rotKick =
+                -facing * Math.cos(shotRad) * 1.8 * powerRatio * kindMult;
+
+              // Body squash/compression
+              body.landed = Math.min(1, 0.5 * powerRatio * kindMult);
+
               kick(body, {
-                recoil: -facing * 110 * strength,
-                rotv: -facing * 2.2 * strength,
+                recoil: recoilDist,
+                liftv: liftKick,
+                rotv: rotKick,
               });
             }
           }
@@ -367,8 +479,30 @@ export default function Field({
               alpha: 1 - fElapsed / 110,
             };
           }
-        } else if (elapsed < driveMs + flightMs + boomMs) {
-          const bElapsed = elapsed - driveMs - flightMs;
+        } else if (elapsed < driveMs + flightMs + hitStopMs) {
+          // Hit-Stop: micro-freeze 48ms right on impact
+          drawTanks[shot.by] = {
+            ...drawTanks[shot.by],
+            x: shot.fromX,
+            lastAngle: shot.angle,
+          };
+          const endX = shot.boom
+            ? shot.boom.x
+            : (shot.path[numPoints * 2 - 2] ?? shot.fromX);
+          const endY = shot.boom
+            ? shot.boom.y
+            : (shot.path[numPoints * 2 - 1] ?? tankY(drawGround, endX));
+          shellPos = {
+            x: endX,
+            y: endY,
+            vx: 0,
+            vy: 0,
+            kind: shot.kind,
+          };
+          shellTrail = shot.path;
+          hitStopFlash = { x: endX, y: endY };
+        } else if (elapsed < driveMs + flightMs + hitStopMs + boomMs) {
+          const bElapsed = elapsed - driveMs - flightMs - hitStopMs;
           const bt = Math.min(1, bElapsed / boomMs);
           if (bt >= 0.35) {
             drawGround = pb.postGround;
@@ -407,10 +541,59 @@ export default function Field({
               progress: bt,
               kind: shot.kind,
             };
-            // Screen shake decaying over the explosion
-            const mag = (1 - bt) * (shot.kind === "ss" ? 9 : shot.kind === "s2" ? 7 : 5);
-            shakeX = (Math.sin(now * 0.09) * mag) * scaleX;
-            shakeY = (Math.cos(now * 0.11) * mag) * scaleY;
+
+            // Trauma-Based Screenshake (Trauma^2)
+            // + Đạn SS hoặc Direct Hit trúng xe: trauma = 1.0
+            // + Đạn S2 khoan hoặc nổ gần (<50px): trauma = 0.75
+            // + Đạn thường S1 hoặc nổ xa: trauma = 0.5
+            const boomX = shot.boom.x;
+            const boomY = shot.boom.y;
+            const namX = pb.preTanks.nam.x;
+            const namY = tankY(pb.preGround, namX);
+            const linhX = pb.preTanks.linh.x;
+            const linhY = tankY(pb.preGround, linhX);
+            const distNam = Math.hypot(boomX - namX, boomY - namY);
+            const distLinh = Math.hypot(boomX - linhX, boomY - linhY);
+            const minDist = Math.min(distNam, distLinh);
+            const isDirectHit =
+              shot.damage.nam > 0 ||
+              shot.damage.linh > 0 ||
+              minDist <= TANK_R + 6;
+
+            let trauma = 0.5;
+            const shooterMobile =
+              pb.preTanks[shot.by]?.mobile ?? DEFAULT_MOBILE[shot.by];
+            const isNamSSExplosion =
+              shot.kind === "ss" &&
+              (shot.by === "nam" || shooterMobile === "armor");
+            const isLinhSSExplosion =
+              shot.kind === "ss" &&
+              (shot.by === "linh" || shooterMobile === "unicorn");
+
+            if (isNamSSExplosion) {
+              // Bear Paw Stomp cực đại trauma rung chuyển chiến trường
+              trauma = 1.35;
+            } else if (shot.kind === "ss" || isDirectHit) {
+              trauma = 1.0;
+            } else if (shot.kind === "s2" || minDist < 50) {
+              trauma = 0.75;
+            }
+
+            // Cường độ rung: shake = trauma * trauma * 14 * unit, giảm chấn dần theo thời gian nổ (1 - bt)
+            const decay = Math.max(0, 1 - bt);
+            const shakeMag =
+              trauma *
+              trauma *
+              14 *
+              unit *
+              decay *
+              (isNamSSExplosion ? 1.3 : 1.0);
+            shakeX =
+              (Math.sin(now * 0.09) * 0.8 + Math.sin(now * 0.23) * 0.2) *
+              shakeMag;
+            shakeY =
+              (Math.cos(now * 0.11) * 0.8 + Math.cos(now * 0.27) * 0.2) *
+              shakeMag;
 
             // Spawn flying dirt & spark particles once at explosion start
             if (spawnedDebrisForN !== shot.n) {
@@ -418,11 +601,53 @@ export default function Field({
 
               // Audio boom & mobile haptics on explosion impact
               playBoom(shot.kind);
+              if (
+                (shot.fell && shot.fell.length > 0) ||
+                (shot as unknown as { endReason?: string }).endReason === "fell" ||
+                (["nam", "linh"] as const).some(
+                  (p) =>
+                    !pb.postTanks[p].alive &&
+                    groundAt(pb.postGround, pb.postTanks[p].x) <= 0
+                )
+              ) {
+                if (playedFallForN !== shot.n) {
+                  playedFallForN = shot.n;
+                  playFall();
+                }
+              }
               if (typeof navigator !== "undefined" && navigator.vibrate) {
                 try {
                   navigator.vibrate([40, 30, 80]);
                 } catch {
                   // Safe fallback
+                }
+              }
+
+              // Bung 18-24 cánh hoa hồng (rose petals) xoay rơi trong gió cho Linh SS
+              if (isLinhSSExplosion) {
+                const petalColors = [
+                  "#f43f5e",
+                  "#fb7185",
+                  "#fda4af",
+                  "#f472b6",
+                  "#ec4899",
+                  "#ffe4e6",
+                ];
+                for (let k = 0; k < 22; k++) {
+                  const ang = (Math.PI * 2 * k) / 22 + (k % 3) * 0.2;
+                  const spd = 65 + ((k * 31) % 115);
+                  petalsRef.current.push({
+                    x: shot.boom.x,
+                    y: shot.boom.y,
+                    vx: Math.cos(ang) * spd,
+                    vy: Math.sin(ang) * spd + 40,
+                    rot: (k * 45 * Math.PI) / 180,
+                    rotSpd: (k % 2 === 0 ? 1 : -1) * (2.4 + (k % 3) * 1.6),
+                    r: 4.8 + (k % 4) * 1.4,
+                    color: petalColors[k % petalColors.length],
+                    bornAt: now,
+                    lifeMs: 1900 + ((k * 73) % 900),
+                  });
                 }
               }
 
@@ -458,6 +683,19 @@ export default function Field({
           };
           if (completedShotN !== shot.n) {
             completedShotN = shot.n;
+            if (
+              playedFallForN !== shot.n &&
+              ((shot.fell && shot.fell.length > 0) ||
+                (shot as unknown as { endReason?: string }).endReason === "fell" ||
+                (["nam", "linh"] as const).some(
+                  (p) =>
+                    !pb.postTanks[p].alive &&
+                    groundAt(pb.postGround, pb.postTanks[p].x) <= 0
+                ))
+            ) {
+              playedFallForN = shot.n;
+              playFall();
+            }
             for (const p of ["nam", "linh"] as const) {
               const dmg = shot.damage[p];
               if (dmg > 0) {
@@ -472,11 +710,71 @@ export default function Field({
                 });
               }
             }
+
+            // Kích hoạt Bong Bóng Hội Thoại Tương Tác Cặp Đôi (Couple Speech Bubbles)
+            const addBubble = (player: Player, text: string, delayMs = 0) => {
+              bubblesRef.current.push({
+                id: ++bubbleIdCounter.current,
+                player,
+                text,
+                bornAt: now + delayMs,
+                lifeMs: 2800,
+              });
+            };
+
+            const fellPlayers: Player[] = [];
+            for (const p of ["nam", "linh"] as const) {
+              if (
+                (shot.fell && shot.fell.includes(p)) ||
+                (!pb.postTanks[p].alive &&
+                  groundAt(pb.postGround, pb.postTanks[p].x) <= 0)
+              ) {
+                fellPlayers.push(p);
+              }
+            }
+
+            if (fellPlayers.length > 0) {
+              for (const fp of fellPlayers) {
+                if (fp === "nam") {
+                  addBubble("nam", "Áaaaa cứu anh vợ ơiii! 🌊", 80);
+                } else {
+                  addBubble("linh", "Áaaaa cứu em anh ơiii! 🪂", 80);
+                }
+              }
+            } else if (shot.by === "nam" && shot.damage.linh > 0) {
+              addBubble("nam", pickCoupleText(NAM_HIT_LINH), 0);
+              addBubble("linh", pickCoupleText(LINH_REACT_HIT), 350);
+            } else if (shot.by === "linh" && shot.damage.nam > 0) {
+              addBubble("linh", pickCoupleText(LINH_HIT_NAM), 0);
+              addBubble("nam", pickCoupleText(NAM_REACT_HIT), 350);
+            } else if (
+              (shot.damage.nam === 0 && shot.damage.linh === 0) ||
+              !shot.boom
+            ) {
+              if (shot.by === "nam") {
+                addBubble("nam", pickCoupleText(NAM_MISS), 0);
+              } else {
+                addBubble("linh", pickCoupleText(LINH_MISS), 0);
+              }
+            }
+
             doneCb(shot.n);
           }
         }
       } else {
         currentShotN = null;
+        if (
+          curState.lastShot &&
+          curState.lastShot.path &&
+          curState.lastShot.path.length >= 4
+        ) {
+          ghostShotByPlayerRef.current[curState.lastShot.by] = {
+            path: curState.lastShot.path,
+            boom: curState.lastShot.boom
+              ? { x: curState.lastShot.boom.x, y: curState.lastShot.boom.y }
+              : undefined,
+          };
+        }
         if (isMyTurn && curState.status === "playing") {
           const active = curState.turn;
           drawTanks[active] = {
@@ -680,29 +978,110 @@ export default function Field({
       }
       ctx.stroke();
 
-      // --- 2b. Ghost Trajectory Trail of Previous Shot ---
-      const ghostPath = curState.lastShot?.path;
-      if (!pb && ghostPath && ghostPath.length >= 4) {
-        ctx.save();
-        ctx.setLineDash([4 * scaleX, 6 * scaleX]);
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
-        ctx.lineWidth = Math.max(1.5, 2 * scaleX);
-        ctx.beginPath();
-        ctx.moveTo(wx(ghostPath[0]), wy(ghostPath[1]));
-        for (let i = 2; i < ghostPath.length; i += 2) {
-          ctx.lineTo(wx(ghostPath[i]), wy(ghostPath[i + 1]));
-        }
-        ctx.stroke();
+      // Dải nước biển bập bềnh ở đáy bản đồ (Ocean Water Surface)
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height);
+      for (let x = 0; x <= WORLD_W; x += 15) {
+        const wyWater =
+          16 +
+          Math.sin(now * 0.004 + x * 0.035) * 3.2 +
+          Math.cos(now * 0.008 + x * 0.075) * 1.6;
+        ctx.lineTo(wx(x), wy(wyWater));
+      }
+      ctx.lineTo(canvas.width, canvas.height);
+      ctx.closePath();
+      const oceanGrad = ctx.createLinearGradient(0, wy(24), 0, canvas.height);
+      oceanGrad.addColorStop(0, "rgba(56, 189, 248, 0.75)");
+      oceanGrad.addColorStop(0.35, "rgba(14, 165, 233, 0.85)");
+      oceanGrad.addColorStop(1, "rgba(3, 105, 161, 0.95)");
+      ctx.fillStyle = oceanGrad;
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.65)";
+      ctx.lineWidth = Math.max(1.5, 2 * scaleY);
+      ctx.stroke();
+      ctx.restore();
 
-        if (curState.lastShot?.boom) {
-          const bx = wx(curState.lastShot.boom.x);
-          const by = wy(curState.lastShot.boom.y);
-          ctx.beginPath();
-          ctx.arc(bx, by, 5 * scaleX, 0, Math.PI * 2);
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
-          ctx.stroke();
+      // --- 2b. Ghost Trajectory Arc of Previous Shot (GunBound style) ---
+      if (!pb && isMyTurn && curState.status === "playing") {
+        const active = curState.turn;
+        const activeTank = curState.tanks[active];
+        let ghost = ghostShotByPlayerRef.current[active];
+
+        // If no cached ghost shot yet, check if player has previously fired
+        if (!ghost) {
+          if (
+            curState.lastShot &&
+            curState.lastShot.by === active &&
+            curState.lastShot.path?.length >= 4
+          ) {
+            ghost = {
+              path: curState.lastShot.path,
+              boom: curState.lastShot.boom
+                ? { x: curState.lastShot.boom.x, y: curState.lastShot.boom.y }
+                : undefined,
+            };
+            ghostShotByPlayerRef.current[active] = ghost;
+          } else if (activeTank.lastAngle > 0 && activeTank.lastPower > 0) {
+            // Simulate trajectory of previous shot
+            const sim = simulateShot(
+              drawGround,
+              curState.tanks,
+              active,
+              activeTank.lastAngle,
+              activeTank.lastPower,
+              curState.wind
+            );
+            ghost = {
+              path: sim.path,
+              boom:
+                sim.outcome === "hit"
+                  ? { x: sim.boom.x, y: sim.boom.y }
+                  : undefined,
+            };
+            ghostShotByPlayerRef.current[active] = ghost;
+          }
         }
-        ctx.restore();
+
+        if (ghost && ghost.path && ghost.path.length >= 4) {
+          ctx.save();
+          // GunBound dotted trajectory line
+          ctx.setLineDash([5 * scaleX, 5 * scaleX]);
+          // Opacity ~0.25–0.35: soft warm yellow for Nam, soft cyan for Linh
+          const ghostColor =
+            active === "nam"
+              ? "rgba(253, 224, 71, 0.32)"
+              : "rgba(56, 189, 248, 0.32)";
+          ctx.strokeStyle = ghostColor;
+          ctx.lineWidth = Math.max(1.5, 2.2 * scaleX);
+          ctx.beginPath();
+          ctx.moveTo(wx(ghost.path[0]), wy(ghost.path[1]));
+          for (let i = 2; i < ghost.path.length; i += 2) {
+            ctx.lineTo(wx(ghost.path[i]), wy(ghost.path[i + 1]));
+          }
+          ctx.stroke();
+
+          // Previous landing / impact marker
+          if (ghost.boom) {
+            const bx = wx(ghost.boom.x);
+            const by = wy(ghost.boom.y);
+            // Outer marker ring
+            ctx.beginPath();
+            ctx.arc(bx, by, 5.5 * scaleX, 0, Math.PI * 2);
+            ctx.strokeStyle = ghostColor;
+            ctx.lineWidth = Math.max(1.2, 1.8 * scaleX);
+            ctx.stroke();
+
+            // Center target crosshair (+)
+            ctx.beginPath();
+            ctx.moveTo(bx - 7 * scaleX, by);
+            ctx.lineTo(bx + 7 * scaleX, by);
+            ctx.moveTo(bx, by - 7 * scaleX);
+            ctx.lineTo(bx, by + 7 * scaleX);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
       }
 
       // --- 3a. Movement trails (dust, exhaust smoke, sparkles) behind the mobiles ---
@@ -777,10 +1156,198 @@ export default function Field({
       const smoothFn = smoothGround(drawGround);
       for (const p of ["nam", "linh"] as const) {
         const t = drawTanks[p];
-        if (!t.alive && t.hp <= 0 && groundAt(drawGround, t.x) <= 0) {
+        const isFell =
+          groundAt(drawGround, t.x) <= 0 ||
+          (!t.alive &&
+            ((pb?.shot?.fell && pb.shot.fell.includes(p)) ||
+              (curState.endReason === "fell" && curState.winner !== p) ||
+              (t.hp <= 0 && groundAt(drawGround, t.x) <= 0)));
+
+        const mobileId: MobileId = t.mobile ?? DEFAULT_MOBILE[p];
+
+        // 3. Phao Vịt Vàng Cứu Hộ Khi Rơi Vực (Yellow Duck Rescue Float)
+        if (isFell) {
+          const isNam = p === "nam";
+          const waveY =
+            16 + Math.sin(now * 0.005 + t.x * 0.1) * 3.5;
+          const waveTilt = Math.cos(now * 0.005 + t.x * 0.1) * 0.08;
+          const cx = wx(t.x);
+          const cy = wy(waveY);
+
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(waveTilt);
+
+          // 1. Thân phao tròn màu vàng tươi viền cam sọc trắng cứu hộ
+          const floatW = 34 * unit;
+          const floatH = 15 * unit;
+          ctx.beginPath();
+          ctx.ellipse(0, 4 * unit, floatW, floatH, 0, 0, Math.PI * 2);
+          ctx.fillStyle = "#facc15";
+          ctx.fill();
+          ctx.strokeStyle = "#ea580c";
+          ctx.lineWidth = Math.max(2, 2.5 * unit);
+          ctx.stroke();
+
+          // Các vệt sọc cứu hộ màu trắng
+          ctx.fillStyle = "rgba(255, 255, 255, 0.92)";
+          for (const sx of [-22, -8, 8, 22]) {
+            ctx.beginPath();
+            ctx.ellipse(
+              sx * unit,
+              4 * unit,
+              4 * unit,
+              10 * unit,
+              sx > 0 ? 0.2 : -0.2,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+          }
+
+          // 2. Đầu chú vịt vàng đáng yêu với mỏ cam ngộ nghĩnh
+          const duckDir = t.facing;
+          const duckHeadX = duckDir * 28 * unit;
+          const duckHeadY = -8 * unit;
+
+          // Cổ vịt
+          ctx.beginPath();
+          ctx.fillStyle = "#fde047";
+          ctx.roundRect(
+            duckHeadX - duckDir * 4 * unit - 5 * unit,
+            -3 * unit,
+            10 * unit,
+            8 * unit,
+            4 * unit
+          );
+          ctx.fill();
+
+          // Đầu vịt
+          ctx.beginPath();
+          ctx.arc(duckHeadX, duckHeadY, 9 * unit, 0, Math.PI * 2);
+          ctx.fillStyle = "#fde047";
+          ctx.fill();
+          ctx.strokeStyle = "#eab308";
+          ctx.lineWidth = Math.max(1, 1.5 * unit);
+          ctx.stroke();
+
+          // Mắt vịt long lanh
+          ctx.beginPath();
+          ctx.arc(
+            duckHeadX + duckDir * 3 * unit,
+            duckHeadY - 2 * unit,
+            2.2 * unit,
+            0,
+            Math.PI * 2
+          );
+          ctx.fillStyle = "#1e293b";
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(
+            duckHeadX + duckDir * 3.5 * unit,
+            duckHeadY - 2.8 * unit,
+            0.8 * unit,
+            0,
+            Math.PI * 2
+          );
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+
+          // Má hồng phớt
+          ctx.beginPath();
+          ctx.arc(duckHeadX, duckHeadY + 3 * unit, 2.5 * unit, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(244, 114, 182, 0.7)";
+          ctx.fill();
+
+          // Mỏ cam ngộ nghĩnh
+          ctx.beginPath();
+          const beakTipX = duckHeadX + duckDir * 16 * unit;
+          ctx.moveTo(duckHeadX + duckDir * 6 * unit, duckHeadY);
+          ctx.lineTo(beakTipX, duckHeadY + 2 * unit);
+          ctx.lineTo(duckHeadX + duckDir * 6 * unit, duckHeadY + 5 * unit);
+          ctx.closePath();
+          ctx.fillStyle = "#f97316";
+          ctx.fill();
+          ctx.strokeStyle = "#c2410c";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+
+          // 3. Cạnh phao có cột cờ & lá cờ trắng SOS bay phấp phới
+          const flagX = -duckDir * 24 * unit;
+          ctx.strokeStyle = "#94a3b8";
+          ctx.lineWidth = Math.max(1.2, 1.8 * unit);
+          ctx.beginPath();
+          ctx.moveTo(flagX, 2 * unit);
+          ctx.lineTo(flagX, -28 * unit);
+          ctx.stroke();
+
+          const waveFlag = Math.sin(now * 0.01) * 3 * unit;
+          ctx.beginPath();
+          ctx.moveTo(flagX, -28 * unit);
+          ctx.quadraticCurveTo(
+            flagX - duckDir * 10 * unit,
+            -28 * unit + waveFlag,
+            flagX - duckDir * 18 * unit,
+            -22 * unit
+          );
+          ctx.quadraticCurveTo(
+            flagX - duckDir * 10 * unit,
+            -16 * unit + waveFlag,
+            flagX,
+            -16 * unit
+          );
+          ctx.closePath();
+          ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+          ctx.fill();
+          ctx.strokeStyle = "#cbd5e1";
+          ctx.stroke();
+
+          ctx.font = "bold " + Math.max(8, Math.round(9 * unit)) + "px sans-serif";
+          ctx.fillStyle = "#ef4444";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            "SOS",
+            flagX - duckDir * 9 * unit,
+            -20 * unit + waveFlag * 0.5
+          );
+
+          // 4. Chiếc xe ngồi lắc lư trên phao
+          ctx.save();
+          ctx.translate(0, -6 * unit);
+          ctx.scale(t.facing, 1);
+          ctx.filter = "grayscale(70%) brightness(80%)";
+          const spriteImg = spritesRef.current[mobileId];
+          if (spriteImg && spriteImg.complete && spriteImg.naturalWidth > 0) {
+            const spriteSize = 54 * unit;
+            ctx.drawImage(
+              spriteImg,
+              -spriteSize / 2,
+              -spriteSize + 8 * unit,
+              spriteSize,
+              spriteSize
+            );
+          } else {
+            ctx.fillStyle = isNam ? "#f43f5e" : "#0ea5e9";
+            ctx.beginPath();
+            ctx.roundRect(
+              -TANK_R * 0.8 * unit,
+              -14 * unit,
+              TANK_R * 1.6 * unit,
+              10 * unit,
+              3 * unit
+            );
+            ctx.fill();
+          }
+          ctx.restore();
+
+          // Pilot badge
+          ctx.font = Math.max(13, Math.round(16 * unit)) + "px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("😵", 0, -42 * unit);
+
+          ctx.restore();
           continue;
         }
-        const mobileId: MobileId = t.mobile ?? DEFAULT_MOBILE[p];
         const prof = MOTION[mobileId];
 
         // Procedural motion: the body follows the engine x with inertia, suspension and a gait
@@ -1086,37 +1653,144 @@ export default function Field({
       if (shellPos) {
         const sx = wx(shellPos.x);
         const sy = wy(shellPos.y);
-        const r =
-          (shellPos.kind === "ss" ? 7.5 : shellPos.kind === "s2" ? 6 : 5) *
-          scaleX;
+        const shooter = pb?.shot.by;
+        const shooterMobile = shooter
+          ? (pb?.preTanks[shooter]?.mobile ?? DEFAULT_MOBILE[shooter])
+          : undefined;
+        const isLinhSS =
+          shellPos.kind === "ss" &&
+          (shooter === "linh" || shooterMobile === "unicorn");
+        const isNamSS =
+          shellPos.kind === "ss" &&
+          (shooter === "nam" || shooterMobile === "armor");
+
+        if (isLinhSS) {
+          // Trái tim cầu vồng tỏa hào quang ngũ sắc (Rainbow Heart SS)
+          ctx.save();
+          const rainbowHue = (now * 0.35) % 360;
+          const glowGrad = ctx.createRadialGradient(
+            sx,
+            sy,
+            2 * scaleX,
+            sx,
+            sy,
+            24 * scaleX
+          );
+          glowGrad.addColorStop(0, "hsla(" + rainbowHue + ", 100%, 75%, 0.85)");
+          glowGrad.addColorStop(
+            0.5,
+            "hsla(" + ((rainbowHue + 120) % 360) + ", 100%, 70%, 0.45)"
+          );
+          glowGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
+          ctx.fillStyle = glowGrad;
+          ctx.beginPath();
+          ctx.arc(sx, sy, 24 * scaleX, 0, Math.PI * 2);
+          ctx.fill();
+
+          const hs = 9.5 * scaleX;
+          ctx.translate(sx, sy - 2 * scaleX);
+          ctx.beginPath();
+          ctx.moveTo(0, hs * 0.45);
+          ctx.bezierCurveTo(-hs * 1.25, -hs * 0.6, -hs * 1.35, -hs * 1.55, 0, -hs * 0.85);
+          ctx.bezierCurveTo(hs * 1.35, -hs * 1.55, hs * 1.25, -hs * 0.6, 0, hs * 0.45);
+          const heartGrad = ctx.createLinearGradient(-hs, -hs, hs, hs);
+          heartGrad.addColorStop(0, "#f43f5e");
+          heartGrad.addColorStop(0.35, "#ec4899");
+          heartGrad.addColorStop(0.7, "#a855f7");
+          heartGrad.addColorStop(1, "#38bdf8");
+          ctx.fillStyle = heartGrad;
+          ctx.fill();
+          ctx.lineWidth = Math.max(1.5, 2 * scaleX);
+          ctx.strokeStyle = "#ffffff";
+          ctx.stroke();
+          ctx.restore();
+        } else if (isNamSS) {
+          // Đại bác bọc gai sấm sét tia lửa đỏ cam rực rỡ
+          ctx.save();
+          const fireGrad = ctx.createRadialGradient(
+            sx,
+            sy,
+            3 * scaleX,
+            sx,
+            sy,
+            24 * scaleX
+          );
+          fireGrad.addColorStop(0, "rgba(254, 240, 138, 0.95)");
+          fireGrad.addColorStop(0.45, "rgba(249, 115, 22, 0.7)");
+          fireGrad.addColorStop(1, "rgba(220, 38, 38, 0)");
+          ctx.fillStyle = fireGrad;
+          ctx.beginPath();
+          ctx.arc(sx, sy, 24 * scaleX, 0, Math.PI * 2);
+          ctx.fill();
+
+          const spin = now * 0.009;
+          const mainR = 8.5 * scaleX;
+          ctx.fillStyle = "#f59e0b";
+          ctx.strokeStyle = "#78350f";
+          ctx.lineWidth = Math.max(1, 1.6 * scaleX);
+          for (let k = 0; k < 8; k++) {
+            const ang = spin + (k * Math.PI) / 4;
+            const spikeTipX = sx + Math.cos(ang) * (mainR + 6 * scaleX);
+            const spikeTipY = sy + Math.sin(ang) * (mainR + 6 * scaleX);
+            ctx.beginPath();
+            ctx.moveTo(sx + Math.cos(ang - 0.28) * mainR, sy + Math.sin(ang - 0.28) * mainR);
+            ctx.lineTo(spikeTipX, spikeTipY);
+            ctx.lineTo(sx + Math.cos(ang + 0.28) * mainR, sy + Math.sin(ang + 0.28) * mainR);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          }
+
+          ctx.beginPath();
+          ctx.arc(sx, sy, mainR, 0, Math.PI * 2);
+          ctx.fillStyle = "#ea580c";
+          ctx.fill();
+          ctx.strokeStyle = "#fef08a";
+          ctx.stroke();
+
+          ctx.strokeStyle = "#fef08a";
+          ctx.lineWidth = Math.max(1.3, 2 * scaleX);
+          for (let k = 0; k < 3; k++) {
+            const sa = (k * 2.1 + now * 0.025) % (Math.PI * 2);
+            ctx.beginPath();
+            ctx.moveTo(sx + Math.cos(sa) * mainR, sy + Math.sin(sa) * mainR);
+            const midR = mainR + 6 * scaleX;
+            ctx.lineTo(sx + Math.cos(sa + 0.25) * midR, sy + Math.sin(sa + 0.25) * midR);
+            ctx.lineTo(sx + Math.cos(sa + 0.1) * (mainR + 13 * scaleX), sy + Math.sin(sa + 0.1) * (mainR + 13 * scaleX));
+            ctx.stroke();
+          }
+          ctx.restore();
+        } else {
+          const r = (shellPos.kind === "ss" ? 7.5 : shellPos.kind === "s2" ? 6 : 5) * scaleX;
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(sx, sy, r * 1.9, 0, Math.PI * 2);
+          ctx.fillStyle = shellPos.kind === "ss" ? "rgba(250, 204, 21, 0.55)" : shellPos.kind === "s2" ? "rgba(45, 212, 191, 0.5)" : "rgba(251, 146, 60, 0.5)";
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(sx, sy, r, 0, Math.PI * 2);
+          ctx.fillStyle = shellPos.kind === "ss" ? "#fef08a" : shellPos.kind === "s2" ? "#14b8a6" : "#fff7ed";
+          ctx.fill();
+          ctx.lineWidth = Math.max(1.5, 2 * scaleX);
+          ctx.strokeStyle = shellPos.kind === "ss" ? "#ca8a04" : shellPos.kind === "s2" ? "#0f766e" : "#ea580c";
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+
+      // --- 4b. Hit-stop micro-freeze impact crunch flash ---
+      if (hitStopFlash) {
+        const fx = wx(hitStopFlash.x);
+        const fy = wy(hitStopFlash.y);
         ctx.save();
         ctx.beginPath();
-        ctx.arc(sx, sy, r * 1.9, 0, Math.PI * 2);
-        ctx.fillStyle =
-          shellPos.kind === "ss"
-            ? "rgba(250, 204, 21, 0.55)"
-            : shellPos.kind === "s2"
-              ? "rgba(45, 212, 191, 0.5)"
-              : "rgba(251, 146, 60, 0.5)";
+        ctx.arc(fx, fy, 14 * scaleX, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
         ctx.fill();
-
         ctx.beginPath();
-        ctx.arc(sx, sy, r, 0, Math.PI * 2);
-        ctx.fillStyle =
-          shellPos.kind === "ss"
-            ? "#fef08a"
-            : shellPos.kind === "s2"
-              ? "#14b8a6"
-              : "#fff7ed";
+        ctx.arc(fx, fy, 24 * scaleX, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(254, 240, 138, 0.5)";
         ctx.fill();
-        ctx.lineWidth = Math.max(1.5, 2 * scaleX);
-        ctx.strokeStyle =
-          shellPos.kind === "ss"
-            ? "#ca8a04"
-            : shellPos.kind === "s2"
-              ? "#0f766e"
-              : "#ea580c";
-        ctx.stroke();
         ctx.restore();
       }
 
@@ -1180,6 +1854,36 @@ export default function Field({
       }
       debrisRef.current = liveDebris;
 
+      // Cánh hoa hồng xoay rơi trong gió cho Linh SS (Rose Petals)
+      const livePetals: RosePetal[] = [];
+      for (const p of petalsRef.current) {
+        const age = now - p.bornAt;
+        if (age < p.lifeMs) {
+          livePetals.push(p);
+          p.vx += activeWind * 15 * dt;
+          p.x += (p.vx + Math.sin(now * 0.005 + p.rot) * 16) * dt;
+          p.vy -= 75 * dt;
+          p.y += p.vy * dt;
+          p.rot += p.rotSpd * dt;
+          const alpha = Math.max(0, 1 - age / p.lifeMs);
+
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.translate(wx(p.x), wy(p.y));
+          ctx.rotate(p.rot);
+          ctx.fillStyle = p.color;
+          ctx.beginPath();
+          const pr = p.r * unit;
+          ctx.ellipse(0, 0, pr * 1.35, pr * 0.75, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      petalsRef.current = livePetals;
+
       // --- 6. Floating damage numbers (-250) ---
       const activeFloats: DamageFloat[] = [];
       for (const f of floatsRef.current) {
@@ -1203,6 +1907,95 @@ export default function Field({
         }
       }
       floatsRef.current = activeFloats;
+
+      // --- 7. Bong Bóng Hội Thoại Tương Tác Cặp Đôi (Couple Speech Bubbles) ---
+      const liveBubbles: ChatBubble[] = [];
+      for (const b of bubblesRef.current) {
+        const age = now - b.bornAt;
+        if (age >= 0 && age < b.lifeMs) {
+          liveBubbles.push(b);
+          const isNam = b.player === "nam";
+          const tank = drawTanks[b.player];
+          const bx = wx(tank.x);
+          const isFell =
+            groundAt(drawGround, tank.x) <= 0 ||
+            (!tank.alive &&
+              ((pb?.shot?.fell && pb.shot.fell.includes(b.player)) ||
+                (curState.endReason === "fell" && curState.winner !== b.player) ||
+                (tank.hp <= 0 && groundAt(drawGround, tank.x) <= 0)));
+          const ty = isFell
+            ? 16 + Math.sin(now * 0.005 + tank.x * 0.1) * 3.5
+            : tankY(drawGround, tank.x);
+          const by = wy(ty + 54);
+
+          // Pop-in spring-damper: vọt lố 1.15 tại 110ms rồi về 1.0 ở 180ms
+          let currentScale = 1.0;
+          if (age < 180) {
+            const expTerm = Math.exp(-0.5169 * 0.03336 * age);
+            const dampedAngle = 0.02856 * age;
+            currentScale =
+              1.0 - expTerm * (Math.cos(dampedAngle) + 0.6039 * Math.sin(dampedAngle));
+          } else {
+            currentScale = 1.0 + Math.sin(age * 0.005) * 0.025;
+          }
+
+          // Fade-out mờ dần ở 500ms cuối
+          const alpha =
+            age > b.lifeMs - 500
+              ? Math.max(0, (b.lifeMs - age) / 500)
+              : 1;
+
+          ctx.save();
+          ctx.globalAlpha = alpha;
+          ctx.font = "bold " + Math.max(11, Math.round(13 * scaleX)) + "px sans-serif";
+          const textMetrics = ctx.measureText(b.text);
+          const padX = 12 * scaleX;
+          const bw = textMetrics.width + padX * 2;
+          const bh = Math.max(25 * scaleY, 27 * unit);
+          const bubbleBottom = by - 8 * scaleY;
+          const bubbleTop = bubbleBottom - bh;
+          const bubbleLeft = bx - bw / 2;
+
+          ctx.translate(bx, by);
+          ctx.scale(currentScale, currentScale);
+          ctx.translate(-bx, -by);
+
+          // Drop shadow nhẹ nhàng
+          ctx.shadowColor = "rgba(0, 0, 0, 0.18)";
+          ctx.shadowBlur = 6 * unit;
+          ctx.shadowOffsetY = 2 * unit;
+
+          // Thân bong bóng rounded rect + đuôi tam giác trỏ xuống đầu xe
+          ctx.beginPath();
+          ctx.roundRect(bubbleLeft, bubbleTop, bw, bh, 8 * unit);
+          ctx.moveTo(bx - 6 * unit, bubbleBottom);
+          ctx.lineTo(bx, by);
+          ctx.lineTo(bx + 6 * unit, bubbleBottom);
+
+          ctx.fillStyle = isNam
+            ? "rgba(255, 255, 255, 0.96)"
+            : "rgba(255, 241, 242, 0.96)";
+          ctx.fill();
+
+          ctx.shadowColor = "transparent";
+          ctx.lineWidth = Math.max(1.5, 2 * unit);
+          ctx.strokeStyle = isNam
+            ? "rgba(59, 130, 246, 0.85)"
+            : "rgba(244, 114, 182, 0.85)";
+          ctx.stroke();
+
+          // Chữ hội thoại
+          ctx.fillStyle = isNam ? "#1e3a8a" : "#831843";
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(b.text, bx, bubbleTop + bh / 2);
+
+          ctx.restore();
+        } else if (age < 0) {
+          liveBubbles.push(b);
+        }
+      }
+      bubblesRef.current = liveBubbles;
 
       ctx.restore();
       rafId = requestAnimationFrame(render);

@@ -266,3 +266,73 @@ export function playDefeat() {
     osc.stop(noteTime + 0.46);
   });
 }
+
+// --- 6. Falling into Pit Sound (Slide whistle down 750Hz -> 90Hz in 0.8s, then pit thud/splash) ---
+export function playFall(customCtx?: AudioContext) {
+  if (muted && !customCtx) return;
+  initAudio();
+  const ctx = customCtx ?? audioCtx;
+  if (!ctx) return;
+
+  const dest: AudioNode =
+    customCtx || !masterGain ? ctx.destination : masterGain;
+  const now = ctx.currentTime;
+  const whistleDur = 0.8;
+
+  // 1. Whistle Oscillator: drops smoothly from 750Hz down to 90Hz
+  const whistleOsc = ctx.createOscillator();
+  const whistleGain = ctx.createGain();
+  whistleOsc.type = "sine";
+  whistleOsc.frequency.setValueAtTime(750, now);
+  whistleOsc.frequency.exponentialRampToValueAtTime(90, now + whistleDur);
+
+  whistleGain.gain.setValueAtTime(0.01, now);
+  whistleGain.gain.linearRampToValueAtTime(0.35, now + 0.05);
+  whistleGain.gain.setValueAtTime(0.35, now + whistleDur - 0.1);
+  whistleGain.gain.exponentialRampToValueAtTime(0.001, now + whistleDur);
+
+  whistleOsc.connect(whistleGain);
+  whistleGain.connect(dest);
+  whistleOsc.start(now);
+  whistleOsc.stop(now + whistleDur);
+
+  // 2. Chạm đáy: sub-bass thud (bùm/thịch trầm) + splash noise
+  const hitTime = now + whistleDur - 0.04;
+  const thudDur = 0.45;
+
+  const thudOsc = ctx.createOscillator();
+  const thudGain = ctx.createGain();
+  thudOsc.type = "triangle";
+  thudOsc.frequency.setValueAtTime(140, hitTime);
+  thudOsc.frequency.exponentialRampToValueAtTime(25, hitTime + thudDur);
+
+  thudGain.gain.setValueAtTime(0.55, hitTime);
+  thudGain.gain.exponentialRampToValueAtTime(0.001, hitTime + thudDur);
+
+  thudOsc.connect(thudGain);
+  thudGain.connect(dest);
+  thudOsc.start(hitTime);
+  thudOsc.stop(hitTime + thudDur);
+
+  // Pit splash / water burst noise
+  const splashDur = 0.4;
+  const noiseBuf = createNoiseBuffer(ctx, splashDur);
+  const noiseSource = ctx.createBufferSource();
+  noiseSource.buffer = noiseBuf;
+
+  const filter = ctx.createBiquadFilter();
+  filter.type = "lowpass";
+  filter.frequency.setValueAtTime(850, hitTime);
+  filter.frequency.exponentialRampToValueAtTime(100, hitTime + splashDur);
+
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.setValueAtTime(0.45, hitTime);
+  noiseGain.gain.exponentialRampToValueAtTime(0.001, hitTime + splashDur);
+
+  noiseSource.connect(filter);
+  filter.connect(noiseGain);
+  noiseGain.connect(dest);
+  noiseSource.start(hitTime);
+  noiseSource.stop(hitTime + splashDur);
+}
+
