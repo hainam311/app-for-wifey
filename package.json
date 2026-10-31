@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "check:tank": "jiti scripts/tank-check.ts",
-    "prebuild": "npm run check:tank",
+    "check:ludo": "jiti scripts/ludo-check.ts",
+    "prebuild": "npm run check:tank && npm run check:ludo",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

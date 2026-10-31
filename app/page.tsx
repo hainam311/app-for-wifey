@@ -97,6 +97,12 @@ function HomeMenu() {
           >
             Bắn tăng 💥
           </Link>
+          <Link
+            href="/ludo"
+            className="rounded-full border-2 border-pink-300 bg-white px-8 py-4 text-center text-lg font-semibold text-pink-500 shadow-sm transition-all hover:bg-pink-50 hover:shadow-md active:scale-95"
+          >
+            Cờ cá ngựa 🐴🎲
+          </Link>
         </div>
       )}
 

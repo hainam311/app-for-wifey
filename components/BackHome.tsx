@@ -2,15 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
-const LOVE_STORY_NAV = [
-  { href: "/food", label: "🍜 Món ăn" },
-  { href: "/drink-prefs", label: "🧋 Đồ uống" },
-  { href: "/journal", label: "💌 Nhật ký" },
-  { href: "/todo", label: "✅ Việc làm" },
-  { href: "/wishlist", label: "🎁 Ước mơ" },
-  { href: "/trips", label: "🧳 Chuyến đi" },
-];
+import { LOVE_STORY_NAV } from "./LoveStoryNav";
 
 export default function BackHome() {
   const pathname = usePathname();
