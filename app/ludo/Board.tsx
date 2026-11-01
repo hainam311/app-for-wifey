@@ -188,15 +188,21 @@ export function computeMovePath(move: LegalMove, owner: Player): RouteStep[] {
   return steps;
 }
 
-interface ActiveHopAnimation {
+export interface ActiveHopAnimation {
   actionN: number;
   horseId: number;
   owner: Player;
   kind: LegalMove["kind"];
   path: RouteStep[];
   stepIndex: number;
-  phase: "hop" | "impact";
   kicks: { owner: Player; horseId: number } | null;
+}
+
+export interface KickFxState {
+  owner: Player;
+  horseId: number;
+  coord: CellCoord;
+  gIdx: number;
 }
 
 function triggerHaptic(pattern: number | number[] = 18) {
@@ -281,7 +287,7 @@ function HorseToken({
   if (isKicking) {
     return (
       <div className="relative flex items-center justify-center w-full h-full pointer-events-none z-50">
-        <div className="w-5 h-5 sm:w-6 sm:h-6 flex items-center justify-center animate-ludo-kick-spin">
+        <div className="w-6 h-6 sm:w-7 sm:h-7 flex items-center justify-center animate-ludo-kick-spin">
           <HorseAvatar owner={horse.owner} />
         </div>
       </div>
@@ -298,13 +304,13 @@ function HorseToken({
       title={`${isNam ? "Anh Nam" : "Em Linh"} - Ngựa #${horse.id + 1}${
         isLegal ? " (Chạm để đi)" : ""
       }`}
-      className={`relative flex items-center justify-center w-full h-full p-0.5 rounded-full transition-all duration-150 ${
+      className={`relative flex items-center justify-center w-full h-full p-0.5 rounded-full transition-transform duration-150 ${
         isHopping
-          ? "animate-ludo-hop scale-120 z-50 drop-shadow-lg ring-3 ring-amber-400 bg-amber-50"
+          ? "animate-ludo-hop scale-120 z-50 drop-shadow-md ring-2 ring-amber-400 bg-amber-50"
           : isSelected
-          ? "cursor-pointer scale-115 z-30 ring-4 ring-amber-400 ring-offset-1 bg-amber-100 shadow-md animate-pulse"
+          ? "cursor-pointer scale-115 z-30 ring-3 ring-amber-400 ring-offset-1 bg-amber-100 shadow-md"
           : isLegal
-          ? "cursor-pointer scale-110 z-20 animate-bounce ring-3 ring-amber-400 ring-offset-1 bg-amber-50/90 shadow-md active:scale-95"
+          ? "cursor-pointer scale-110 z-20 ring-2 ring-amber-400 ring-offset-1 bg-amber-50/90 shadow-sm active:scale-95"
           : "cursor-default"
       }`}
     >
@@ -326,8 +332,34 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
   const [hoveredHorseId, setHoveredHorseId] = useState<number | null>(null);
   const [selectedHorseId, setSelectedHorseId] = useState<number | null>(null);
   const [animating, setAnimating] = useState<ActiveHopAnimation | null>(null);
+  const [kickFx, setKickFx] = useState<KickFxState | null>(null);
 
   const lastAnimatedN = useRef<number>(state.lastAction?.n ?? -1);
+  const activeTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const stateRef = useRef<LudoState>(state);
+  stateRef.current = state;
+
+  const clearAnimationTimers = () => {
+    activeTimersRef.current.forEach((t) => clearTimeout(t));
+    activeTimersRef.current = [];
+  };
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      clearAnimationTimers();
+    };
+  }, []);
+
+  // Reset animation tracker if state.lastAction is null (new game)
+  useEffect(() => {
+    if (!state.lastAction) {
+      lastAnimatedN.current = -1;
+      clearAnimationTimers();
+      setAnimating(null);
+      setKickFx(null);
+    }
+  }, [state.lastAction]);
 
   // Clear preview selection when turn or phase changes
   useEffect(() => {
@@ -337,7 +369,9 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
     }
   }, [state.phase, state.turn]);
 
-  // Hop Step & Kick FX Animation Driver
+  // Paced Hop Step & Guaranteed Kick FX Animation Driver
+  const actionN = state.lastAction?.n ?? -1;
+
   useEffect(() => {
     if (!state.lastAction) return;
     const action = state.lastAction;
@@ -349,7 +383,14 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
     const path = computeMovePath(move, action.by);
     if (path.length === 0) return;
 
-    // Start hopping animation sequence
+    // Clear previous timers before starting fresh sequence
+    clearAnimationTimers();
+
+    const STEP_MS = 360;
+    const KICK_MS = 700;
+    const SETTLE_MS = 250;
+
+    // Start with step 0
     setAnimating({
       actionN: action.n,
       horseId: move.horseId,
@@ -357,61 +398,108 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
       kind: move.kind,
       path,
       stepIndex: 0,
-      phase: "hop",
       kicks: move.kicks,
     });
 
-    playHop();
+    if (move.kind === "deploy") {
+      playDeploy();
+    } else {
+      playHop();
+    }
     triggerHaptic(14);
 
-    let curStep = 0;
-    const hopInterval = setInterval(() => {
-      curStep++;
-      if (curStep < path.length) {
-        setAnimating((prev) => (prev ? { ...prev, stepIndex: curStep } : null));
+    // Single-step move (e.g. Deploy)
+    if (path.length === 1) {
+      const destStep = path[0];
+      if (move.kicks) {
+        const gIdx = destStep.globalTrackIndex ?? 0;
+        setKickFx({
+          owner: move.kicks.owner,
+          horseId: move.kicks.horseId,
+          coord: destStep.coord,
+          gIdx,
+        });
+        playKick();
+        triggerHaptic([35, 50, 70]);
+
+        const tKick = setTimeout(() => {
+          setKickFx(null);
+          setAnimating(null);
+        }, KICK_MS);
+        activeTimersRef.current.push(tKick);
+      } else {
+        const tSettle = setTimeout(() => {
+          setAnimating(null);
+        }, SETTLE_MS);
+        activeTimersRef.current.push(tSettle);
+      }
+      return;
+    }
+
+    // Multi-step hopping (path.length > 1)
+    // Intermediate steps: 1 .. path.length - 2
+    for (let i = 1; i < path.length - 1; i++) {
+      const tStep = setTimeout(() => {
+        setAnimating((prev) => (prev ? { ...prev, stepIndex: i } : null));
         playHop();
         triggerHaptic(14);
+      }, i * STEP_MS);
+      activeTimersRef.current.push(tStep);
+    }
+
+    // Destination step: path.length - 1
+    const destIdx = path.length - 1;
+    const destStep = path[destIdx];
+    const destTime = destIdx * STEP_MS;
+
+    const tDest = setTimeout(() => {
+      setAnimating((prev) => (prev ? { ...prev, stepIndex: destIdx } : null));
+
+      if (move.kicks) {
+        const gIdx = destStep.globalTrackIndex ?? 0;
+        setKickFx({
+          owner: move.kicks.owner,
+          horseId: move.kicks.horseId,
+          coord: destStep.coord,
+          gIdx,
+        });
+        playKick();
+        triggerHaptic([35, 50, 70]);
+
+        const tKickEnd = setTimeout(() => {
+          setKickFx(null);
+          setAnimating(null);
+        }, KICK_MS);
+        activeTimersRef.current.push(tKickEnd);
       } else {
-        // Destination cell reached!
-        clearInterval(hopInterval);
-
-        if (move.kicks) {
-          // Trigger Kick Impact FX
-          setAnimating((prev) =>
-            prev ? { ...prev, stepIndex: path.length - 1, phase: "impact" } : null
-          );
-          playKick();
-          triggerHaptic([35, 45, 60]);
-
-          setTimeout(() => {
-            setAnimating(null);
-          }, 420);
+        if (move.kind === "enter_home" || move.kind === "climb_home") {
+          playHomeStep(move.toPos);
         } else {
-          // Landing sound effects
-          if (move.kind === "deploy") {
-            playDeploy();
-          } else if (move.kind === "enter_home" || move.kind === "climb_home") {
-            playHomeStep(move.toPos);
-          }
-          if (state.status === "over") {
-            playWin();
-          }
-          setTimeout(() => {
-            setAnimating(null);
-          }, 120);
+          playHop();
         }
-      }
-    }, 100);
+        triggerHaptic(14);
 
-    return () => clearInterval(hopInterval);
-  }, [state.lastAction, state.status]);
+        if (stateRef.current.status === "over") {
+          playWin();
+        }
+
+        const tEnd = setTimeout(() => {
+          setAnimating(null);
+        }, SETTLE_MS);
+        activeTimersRef.current.push(tEnd);
+      }
+    }, destTime);
+    activeTimersRef.current.push(tDest);
+
+  }, [actionN]);
 
   const canControl = isHotseat || state.turn === me;
   const isMovePhase =
     state.status === "playing" &&
     state.phase === "move" &&
     canControl &&
-    animating === null;
+    animating === null &&
+    kickFx === null;
   const dice = state.dice ?? 0;
 
   // Compute legal moves
@@ -470,7 +558,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
     return m;
   }, [previewRoute]);
 
-  // Click & hover handlers
+  // Click handlers
   const handleHorseSelect = (horseId: number) => {
     if (!isMovePhase || !legalHorsesMap.has(horseId)) return;
     if (activeHorseId === horseId) {
@@ -515,14 +603,13 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
 
   // Animate Override: Adjust horse positions while hopping or kicking
   let hoppingHorse: { horse: Horse; coord: CellCoord; zone: "track" | "home"; pos: number } | null = null;
-  let kickedHorseRender: { horse: Horse; gIdx: number; isKicking: boolean } | null = null;
-  let collisionCellGIdx: number | null = null;
+  let victimSittingGIdx: number | null = null;
+  let victimHorse: Horse | null = null;
 
   if (animating) {
     // 1. Moving Horse: remove from static board, place at current step
     const mover = state.horses[animating.owner].find((h) => h.id === animating.horseId);
     if (mover) {
-      // Remove from track / home / stable
       for (const idx in trackHorses) {
         if (trackHorses[idx].owner === mover.owner && trackHorses[idx].id === mover.id) {
           delete trackHorses[idx];
@@ -552,31 +639,35 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
       }
     }
 
-    // 2. Kicked Horse: While hopping, still sits on landing cell; during impact, spins and scales down
-    if (animating.kicks) {
+    // 2. Kicked Horse during hopping (before kickFx fires):
+    // Still sits at the landing cell waiting to be kicked!
+    if (animating.kicks && kickFx === null) {
       const destStep = animating.path[animating.path.length - 1];
       if (destStep && destStep.globalTrackIndex !== undefined) {
-        const destGIdx = destStep.globalTrackIndex;
-        collisionCellGIdx = destGIdx;
+        victimSittingGIdx = destStep.globalTrackIndex;
         const kickedOwner = animating.kicks.owner;
         const kickedId = animating.kicks.horseId;
-        const kickedH = state.horses[kickedOwner].find((h) => h.id === kickedId);
-
-        if (kickedH) {
-          // Remove from stable during animation
+        const kHorse = state.horses[kickedOwner].find((h) => h.id === kickedId);
+        if (kHorse) {
+          victimHorse = { ...kHorse, zone: "track", pos: destStep.pos };
+          // Remove from stable lookup while animation runs
           if (kickedOwner === "nam") {
             namStable = namStable.filter((h) => h.id !== kickedId);
           } else {
             linhStable = linhStable.filter((h) => h.id !== kickedId);
           }
-
-          kickedHorseRender = {
-            horse: kickedH,
-            gIdx: destGIdx,
-            isKicking: animating.phase === "impact",
-          };
         }
       }
+    }
+  }
+
+  // 3. Kicked Horse during kickFx impact:
+  if (kickFx) {
+    // Ensure kicked horse is NOT rendered in stable during the 700ms kick spin
+    if (kickFx.owner === "nam") {
+      namStable = namStable.filter((h) => h.id !== kickFx.horseId);
+    } else {
+      linhStable = linhStable.filter((h) => h.id !== kickFx.horseId);
     }
   }
 
@@ -590,7 +681,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
       <div className="grid grid-cols-11 grid-rows-11 gap-1 w-full h-full relative">
         {/* ================= 1. CORNER YARDS ================= */}
 
-        {/* Top-Left Yard (rows 0..3, cols 0..3): Linh Status & Score */}
+        {/* Top-Left Yard: Linh Status & Score */}
         <div
           style={{ gridRow: "1 / span 4", gridColumn: "1 / span 4" }}
           className={`flex flex-col justify-between p-2 rounded-2xl border transition-all ${
@@ -626,7 +717,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
           </div>
         </div>
 
-        {/* Top-Right Yard (rows 0..3, cols 7..10): Linh Stable */}
+        {/* Top-Right Yard: Linh Stable */}
         <div
           style={{ gridRow: "1 / span 4", gridColumn: "8 / span 4" }}
           className="flex flex-col justify-between p-2 rounded-2xl border border-sky-300/80 bg-gradient-to-br from-sky-50 via-sky-100/50 to-blue-100/70 shadow-inner"
@@ -676,7 +767,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
           </div>
         </div>
 
-        {/* Bottom-Left Yard (rows 7..10, cols 0..3): Nam Stable */}
+        {/* Bottom-Left Yard: Nam Stable */}
         <div
           style={{ gridRow: "8 / span 4", gridColumn: "1 / span 4" }}
           className="flex flex-col justify-between p-2 rounded-2xl border border-pink-300/80 bg-gradient-to-br from-pink-50 via-rose-100/50 to-pink-100/70 shadow-inner"
@@ -726,7 +817,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
           </div>
         </div>
 
-        {/* Bottom-Right Yard (rows 7..10, cols 7..10): Nam Status & Score */}
+        {/* Bottom-Right Yard: Nam Status & Score */}
         <div
           style={{ gridRow: "8 / span 4", gridColumn: "8 / span 4" }}
           className={`flex flex-col justify-between p-2 rounded-2xl border transition-all ${
@@ -765,7 +856,6 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
         {/* ================= 2. PERIMETER CELLS (36 cells, 0..35) ================= */}
         {Object.entries(PERIMETER_CELLS).map(([idxStr, coord]) => {
           const idx = Number(idxStr);
-          const horse = trackHorses[idx];
           const isSafe = SAFE_CELLS.includes(idx);
           const isNamStart = idx === 0;
           const isLinhStart = idx === 18;
@@ -778,20 +868,22 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
           const isPreviewDest = previewStep !== undefined && previewStep.isDestination;
           const isKickTarget = previewStep?.isKick === true;
 
-          // Collision Shake during kick impact
-          const isCollisionCell = collisionCellGIdx === idx && animating?.phase === "impact";
+          // Kick collision FX on this cell
+          const isKickCell = kickFx !== null && kickFx.gIdx === idx;
 
-          const isLegalHorse =
+          // Victim sitting on cell waiting to be kicked
+          const isVictimSitting = victimSittingGIdx === idx && victimHorse !== null;
+
+          const horse: Horse | undefined = isVictimSitting && victimHorse ? victimHorse : trackHorses[idx];
+
+          const isLegalHorse = Boolean(
             horse &&
             isMovePhase &&
             horse.owner === state.turn &&
-            legalHorsesMap.has(horse.id);
+            legalHorsesMap.has(horse.id)
+          );
 
-          const isSelectedHorse = horse && activeHorseId === horse.id;
-
-          // Kicked horse rendering on landing cell
-          const kickingHorseOnThisCell =
-            kickedHorseRender && kickedHorseRender.gIdx === idx ? kickedHorseRender : null;
+          const isSelectedHorse = Boolean(horse && activeHorseId === horse.id);
 
           return (
             <div
@@ -803,14 +895,14 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
                   : undefined
               }
               className={`relative flex items-center justify-center rounded-lg sm:rounded-xl border transition-all ${
-                isCollisionCell
+                isKickCell
                   ? "animate-ludo-shake ring-4 ring-rose-500 bg-rose-200 z-40"
                   : isPreviewDest
                   ? isKickTarget
-                    ? "cursor-pointer ring-4 ring-rose-500 bg-rose-100/90 shadow-lg shadow-rose-300 animate-pulse z-30 border-rose-500"
-                    : "cursor-pointer ring-3 ring-amber-400 bg-gradient-to-br from-amber-100 via-yellow-100 to-amber-200 shadow-md animate-pulse z-30 border-amber-500"
+                    ? "cursor-pointer ring-3 ring-rose-400 bg-rose-50/90 shadow-md z-30 border-rose-400"
+                    : "cursor-pointer ring-2 ring-amber-400 bg-amber-50/90 shadow-sm z-30 border-amber-400"
                   : isPreviewPath
-                  ? "border-amber-400 bg-amber-100/60 shadow-inner ring-2 ring-amber-300/80 z-20"
+                  ? "border-amber-300 bg-amber-50/70 ring-1 ring-amber-200 z-20"
                   : isSafe
                   ? "border-amber-400 bg-gradient-to-tr from-amber-100 to-yellow-50 shadow-inner"
                   : isNamStart
@@ -825,76 +917,75 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
               }`}
             >
               {/* Static Badges / Directions */}
-              {isSafe && !horse && !isPreviewPath && !isPreviewDest && (
+              {isSafe && !horse && !isPreviewPath && !isPreviewDest && !isKickCell && (
                 <span className="text-[10px] sm:text-xs select-none">⭐</span>
               )}
-              {isNamStart && !horse && !isPreviewPath && !isPreviewDest && (
+              {isNamStart && !horse && !isPreviewPath && !isPreviewDest && !isKickCell && (
                 <span className="text-[9px] sm:text-[10px] font-black text-pink-500">
                   ↑
                 </span>
               )}
-              {isLinhStart && !horse && !isPreviewPath && !isPreviewDest && (
+              {isLinhStart && !horse && !isPreviewPath && !isPreviewDest && !isKickCell && (
                 <span className="text-[9px] sm:text-[10px] font-black text-sky-500">
                   ↓
                 </span>
               )}
-              {isNamDoor && !horse && !isPreviewPath && !isPreviewDest && (
+              {isNamDoor && !horse && !isPreviewPath && !isPreviewDest && !isKickCell && (
                 <span className="text-[9px] font-bold text-pink-400">▲</span>
               )}
-              {isLinhDoor && !horse && !isPreviewPath && !isPreviewDest && (
+              {isLinhDoor && !horse && !isPreviewPath && !isPreviewDest && !isKickCell && (
                 <span className="text-[9px] font-bold text-sky-400">▼</span>
               )}
 
-              {/* Path Preview Step Number Badge */}
+              {/* Path Preview Step Number Badge (Subtle, clean, zero lag) */}
               {isPreviewPath && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <span className="flex items-center justify-center w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400 text-amber-950 font-black text-[9px] sm:text-[10px] shadow-xs ring-1 ring-amber-200 animate-pulse">
+                  <span className="flex items-center justify-center w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-300/90 text-amber-950 font-bold text-[9px] sm:text-[10px] shadow-2xs">
                     {previewStep?.stepNumber}
                   </span>
                 </div>
               )}
 
-              {/* Destination Target Preview */}
-              {isPreviewDest && (
+              {/* Destination Target Preview (Lightweight, clean) */}
+              {isPreviewDest && !isKickCell && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
                   {isKickTarget ? (
-                    <div className="relative flex items-center justify-center w-full h-full">
-                      <div className="absolute inset-0 rounded-lg sm:rounded-xl ring-2 ring-rose-500 animate-ping" />
-                      <span className="text-base sm:text-xl animate-bounce drop-shadow-md select-none z-40">
-                        💥
-                      </span>
-                    </div>
+                    <span className="text-base sm:text-xl drop-shadow-sm select-none">
+                      💥
+                    </span>
                   ) : (
-                    <div className="relative flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6">
-                      <span className="absolute inset-0 rounded-full bg-amber-400/50 animate-ping" />
-                      <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 border-amber-600 bg-amber-400 flex items-center justify-center shadow-xs">
-                        <span className="w-1.5 h-1.5 rounded-full bg-white" />
-                      </span>
-                    </div>
+                    <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 border-amber-500 bg-amber-300 flex items-center justify-center shadow-2xs">
+                      <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                    </span>
                   )}
                 </div>
               )}
 
-              {/* Kick Impact Flash Overlay */}
-              {isCollisionCell && (
+              {/* Kick Impact Flash Overlay (💥 and golden flash) */}
+              {isKickCell && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
-                  <div className="absolute inset-0 rounded-lg sm:rounded-xl bg-amber-300 animate-ludo-impact-flash" />
-                  <span className="text-2xl sm:text-3xl animate-bounce drop-shadow-lg select-none z-50">
+                  <div className="absolute inset-0 rounded-lg sm:rounded-xl bg-amber-300/80 animate-ludo-impact-flash" />
+                  <span className="text-2xl sm:text-3xl select-none z-50">
                     💥
                   </span>
                 </div>
               )}
 
-              {/* Kicked Horse (Spins away during impact) */}
-              {kickingHorseOnThisCell && (
+              {/* Kicked Horse (Spins 720° and vanishes) */}
+              {isKickCell && (
                 <HorseToken
-                  horse={kickingHorseOnThisCell.horse}
-                  isKicking={kickingHorseOnThisCell.isKicking}
+                  horse={{
+                    id: kickFx.horseId,
+                    owner: kickFx.owner,
+                    zone: "track",
+                    pos: -1,
+                  }}
+                  isKicking={true}
                 />
               )}
 
-              {/* Standing Horse on Track */}
-              {horse && !kickingHorseOnThisCell && (
+              {/* Standing Horse on Track (or victim waiting to be kicked) */}
+              {horse && !isKickCell && (
                 <HorseToken
                   horse={horse}
                   isLegal={isLegalHorse}
@@ -913,19 +1004,20 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
         {/* Nam Home Stairs (1..6) */}
         {Object.entries(NAM_HOME_CELLS).map(([stepStr, coord]) => {
           const step = Number(stepStr);
-          const horse = homeHorses.nam[step];
+          const horse: Horse | undefined = homeHorses.nam[step];
 
           const previewStep = previewHomeMap.get(`nam:${step}`);
           const isPreviewPath = previewStep !== undefined && !previewStep.isDestination;
           const isPreviewDest = previewStep !== undefined && previewStep.isDestination;
 
-          const isLegalHorse =
+          const isLegalHorse = Boolean(
             horse &&
             isMovePhase &&
             horse.owner === state.turn &&
-            legalHorsesMap.has(horse.id);
+            legalHorsesMap.has(horse.id)
+          );
 
-          const isSelectedHorse = horse && activeHorseId === horse.id;
+          const isSelectedHorse = Boolean(horse && activeHorseId === horse.id);
 
           return (
             <div
@@ -938,9 +1030,9 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
               }
               className={`relative flex items-center justify-center rounded-lg sm:rounded-xl border transition-all ${
                 isPreviewDest
-                  ? "cursor-pointer ring-3 ring-amber-400 bg-gradient-to-br from-amber-100 via-pink-100 to-amber-200 shadow-md animate-pulse z-30 border-amber-500"
+                  ? "cursor-pointer ring-2 ring-amber-400 bg-amber-50/90 shadow-sm z-30 border-amber-400"
                   : isPreviewPath
-                  ? "border-amber-400 bg-amber-100/60 shadow-inner ring-2 ring-amber-300/80 z-20"
+                  ? "border-amber-300 bg-amber-50/70 ring-1 ring-amber-200 z-20"
                   : "border-pink-300/80 bg-gradient-to-br from-pink-100/90 to-rose-100/90 shadow-2xs"
               }`}
             >
@@ -952,7 +1044,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
 
               {isPreviewPath && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <span className="flex items-center justify-center w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400 text-amber-950 font-black text-[9px] sm:text-[10px] shadow-xs ring-1 ring-amber-200 animate-pulse">
+                  <span className="flex items-center justify-center w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-300/90 text-amber-950 font-bold text-[9px] sm:text-[10px] shadow-2xs">
                     {previewStep?.stepNumber}
                   </span>
                 </div>
@@ -960,12 +1052,9 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
 
               {isPreviewDest && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-                  <div className="relative flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6">
-                    <span className="absolute inset-0 rounded-full bg-amber-400/50 animate-ping" />
-                    <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 border-amber-600 bg-amber-400 flex items-center justify-center shadow-xs">
-                      <span className="w-1.5 h-1.5 rounded-full bg-white" />
-                    </span>
-                  </div>
+                  <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 border-amber-500 bg-amber-300 flex items-center justify-center shadow-2xs">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                  </span>
                 </div>
               )}
 
@@ -986,19 +1075,20 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
         {/* Linh Home Stairs (1..6) */}
         {Object.entries(LINH_HOME_CELLS).map(([stepStr, coord]) => {
           const step = Number(stepStr);
-          const horse = homeHorses.linh[step];
+          const horse: Horse | undefined = homeHorses.linh[step];
 
           const previewStep = previewHomeMap.get(`linh:${step}`);
           const isPreviewPath = previewStep !== undefined && !previewStep.isDestination;
           const isPreviewDest = previewStep !== undefined && previewStep.isDestination;
 
-          const isLegalHorse =
+          const isLegalHorse = Boolean(
             horse &&
             isMovePhase &&
             horse.owner === state.turn &&
-            legalHorsesMap.has(horse.id);
+            legalHorsesMap.has(horse.id)
+          );
 
-          const isSelectedHorse = horse && activeHorseId === horse.id;
+          const isSelectedHorse = Boolean(horse && activeHorseId === horse.id);
 
           return (
             <div
@@ -1011,9 +1101,9 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
               }
               className={`relative flex items-center justify-center rounded-lg sm:rounded-xl border transition-all ${
                 isPreviewDest
-                  ? "cursor-pointer ring-3 ring-amber-400 bg-gradient-to-br from-amber-100 via-sky-100 to-amber-200 shadow-md animate-pulse z-30 border-amber-500"
+                  ? "cursor-pointer ring-2 ring-amber-400 bg-amber-50/90 shadow-sm z-30 border-amber-400"
                   : isPreviewPath
-                  ? "border-amber-400 bg-amber-100/60 shadow-inner ring-2 ring-amber-300/80 z-20"
+                  ? "border-amber-300 bg-amber-50/70 ring-1 ring-amber-200 z-20"
                   : "border-sky-300/80 bg-gradient-to-br from-sky-100/90 to-blue-100/90 shadow-2xs"
               }`}
             >
@@ -1025,7 +1115,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
 
               {isPreviewPath && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <span className="flex items-center justify-center w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-400 text-amber-950 font-black text-[9px] sm:text-[10px] shadow-xs ring-1 ring-amber-200 animate-pulse">
+                  <span className="flex items-center justify-center w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full bg-amber-300/90 text-amber-950 font-bold text-[9px] sm:text-[10px] shadow-2xs">
                     {previewStep?.stepNumber}
                   </span>
                 </div>
@@ -1033,12 +1123,9 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
 
               {isPreviewDest && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-30">
-                  <div className="relative flex items-center justify-center w-5 h-5 sm:w-6 sm:h-6">
-                    <span className="absolute inset-0 rounded-full bg-amber-400/50 animate-ping" />
-                    <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 border-amber-600 bg-amber-400 flex items-center justify-center shadow-xs">
-                      <span className="w-1.5 h-1.5 rounded-full bg-white" />
-                    </span>
-                  </div>
+                  <span className="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-full border-2 border-amber-500 bg-amber-300 flex items-center justify-center shadow-2xs">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                  </span>
                 </div>
               )}
 
@@ -1085,6 +1172,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
         {/* ================= 6. HOPPING HORSE OVERLAY ================= */}
         {hoppingHorse && (
           <div
+            key={`hop-${animating?.actionN}-${animating?.stepIndex}`}
             style={{
               gridRow: hoppingHorse.coord.r + 1,
               gridColumn: hoppingHorse.coord.c + 1,
@@ -1092,7 +1180,7 @@ export default function Board({ state, me, isHotseat, onMove }: BoardProps) {
             className="relative flex items-center justify-center z-50 pointer-events-none"
           >
             {/* Soft Shadow underneath hopping horse */}
-            <div className="absolute -bottom-0.5 w-4 h-1.5 rounded-full bg-black/20 blur-[1px] animate-pulse" />
+            <div className="absolute -bottom-0.5 w-4 h-1.5 rounded-full bg-black/20 blur-[1px]" />
             <HorseToken
               horse={hoppingHorse.horse}
               isHopping={true}
