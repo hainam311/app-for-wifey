@@ -93,5 +93,9 @@ service cloud.firestore {
         && request.resource.data.ground.size() == 300;
       allow delete: if false;
     }
+
+    match /games/{roomId} {
+      allow read, write: if isSignedIn();
+    }
   }
 }

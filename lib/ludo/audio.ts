@@ -123,23 +123,23 @@ export function playHop() {
   if (!audioCtx || !masterGain) return;
 
   const now = audioCtx.currentTime;
-  // Double tap like a cute clip-clop
-  [0, 0.07].forEach((delay, idx) => {
+  // Double tap like a cute clip-clop, rapid and snappy (~75ms total)
+  [0, 0.042].forEach((delay, idx) => {
     if (!audioCtx || !masterGain) return;
     const t = now + delay;
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = "sine";
-    osc.frequency.setValueAtTime(idx === 0 ? 520 : 680, t);
-    osc.frequency.exponentialRampToValueAtTime(240, t + 0.045);
+    osc.frequency.setValueAtTime(idx === 0 ? 560 : 720, t);
+    osc.frequency.exponentialRampToValueAtTime(260, t + 0.035);
 
     gain.gain.setValueAtTime(0.32, t);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.035);
 
     osc.connect(gain);
     gain.connect(masterGain);
     osc.start(t);
-    osc.stop(t + 0.05);
+    osc.stop(t + 0.038);
   });
 }
 
