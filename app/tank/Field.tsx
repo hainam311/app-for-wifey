@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { playBoom, playFall } from "@/lib/tank/audio";
 import {
   COLS,
@@ -241,12 +241,86 @@ export default function Field({
       >
     >
   >({});
+  // Camera 2D Coordinates & Pan System
+  const targetCamRef = useRef({ x: 0, y: 0 });
+  const currentCamRef = useRef({ x: 0, y: 0 });
+  const [panMode, setPanMode] = useState<"aim" | "pan">("aim");
+  const panModeRef = useRef(panMode);
+  useEffect(() => {
+    panModeRef.current = panMode;
+  }, [panMode]);
+
+  const lastTurnRef = useRef<Player | null>(null);
+  const pointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map());
+  const isPanningRef = useRef(false);
+  const isAimingRef = useRef(false);
+  const lastPanClientRef = useRef<{ x: number; y: number } | null>(null);
+
+  const holdTimerRef = useRef<{ timeout?: NodeJS.Timeout; interval?: NodeJS.Timeout } | null>(null);
+  const stopCamHold = () => {
+    if (holdTimerRef.current) {
+      if (holdTimerRef.current.timeout) clearTimeout(holdTimerRef.current.timeout);
+      if (holdTimerRef.current.interval) clearInterval(holdTimerRef.current.interval);
+      holdTimerRef.current = null;
+    }
+  };
+
+  const moveCam = (dx: number, dy: number) => {
+    const nextX = Math.max(-380, Math.min(380, targetCamRef.current.x + dx));
+    const nextY = Math.max(-240, Math.min(180, targetCamRef.current.y + dy));
+    targetCamRef.current = { x: nextX, y: nextY };
+  };
+
+  const startCamHold = (dx: number, dy: number) => {
+    stopCamHold();
+    moveCam(dx, dy);
+    const timeout = setTimeout(() => {
+      const interval = setInterval(() => {
+        moveCam(dx * 0.35, dy * 0.35);
+      }, 32);
+      holdTimerRef.current = { interval };
+    }, 220);
+    holdTimerRef.current = { timeout };
+  };
+
+  const handleCenterCamera = () => {
+    const {
+      state: curState,
+      actualX: curActualX,
+      myTurn: isMyTurn,
+    } = latestRef.current;
+    const activeTank = curState.tanks[curState.turn];
+    const tx = isMyTurn ? curActualX : activeTank.x;
+    const ty = tankY(curState.ground, tx);
+
+    const targetX = Math.max(-380, Math.min(380, tx - WORLD_W / 2));
+    const targetY = ty < 130 ? Math.max(-200, ty - 150) : 0;
+
+    if (
+      Math.abs(targetCamRef.current.x - targetX) < 15 &&
+      Math.abs(targetCamRef.current.y - targetY) < 15
+    ) {
+      targetCamRef.current = { x: 0, y: targetY };
+    } else {
+      targetCamRef.current = { x: targetX, y: targetY };
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamHold();
+    };
+  }, []);
+
   const lastGameIdRef = useRef(state.gameId);
   if (lastGameIdRef.current !== state.gameId) {
     lastGameIdRef.current = state.gameId;
     ghostShotByPlayerRef.current = {};
     bubblesRef.current = [];
     petalsRef.current = [];
+    targetCamRef.current = { x: 0, y: 0 };
+    currentCamRef.current = { x: 0, y: 0 };
+    lastTurnRef.current = null;
   }
 
   // Keep latest props in a ref so the requestAnimationFrame loop never reads stale closures
@@ -334,12 +408,39 @@ export default function Field({
         canvas.height = targetH;
       }
 
+      // Smooth Exponential Glide Camera Animation
+      const camDt = Math.min(0.05, dt);
+      const camLerp = 1 - Math.exp(-14 * camDt);
+      currentCamRef.current.x += (targetCamRef.current.x - currentCamRef.current.x) * camLerp;
+      currentCamRef.current.y += (targetCamRef.current.y - currentCamRef.current.y) * camLerp;
+
       const scaleX = canvas.width / WORLD_W;
       const scaleY = canvas.height / WORLD_H;
       // Uniform 1:1 pixel scale so tank sprites, circles, and UI badges never distort
       const unit = Math.min(scaleX, scaleY);
-      const wx = (x: number) => x * scaleX;
-      const wy = (y: number) => (WORLD_H - y) * scaleY;
+      const camX = currentCamRef.current.x;
+      const camY = currentCamRef.current.y;
+      const wx = (x: number) => (x - camX) * scaleX;
+      const wy = (y: number) => (WORLD_H - (y - camY)) * scaleY;
+
+      // Smart Auto-Framing: Auto-lift camera if tank falls into deep crater (ty < 130) or on turn start
+      if (curState.status === "playing") {
+        const active = curState.turn;
+        const myX = isMyTurn ? curActualX : curState.tanks[active].x;
+        const ty = tankY(curState.ground, myX);
+
+        if (lastTurnRef.current !== curState.turn) {
+          lastTurnRef.current = curState.turn;
+          if (isMyTurn && ty < 130) {
+            targetCamRef.current.y = Math.max(-200, ty - 150);
+          }
+        } else if (isMyTurn && ty < 130) {
+          const neededCamY = Math.max(-200, ty - 150);
+          if (targetCamRef.current.y > neededCamY) {
+            targetCamRef.current.y = neededCamY;
+          }
+        }
+      }
 
       const theme = THEMES[Math.abs(curState.gameId) % THEMES.length];
       const activeWind = pb ? pb.shot.wind : curState.wind;
@@ -795,12 +896,12 @@ export default function Field({
       sky.addColorStop(0.58, theme.skyMid);
       sky.addColorStop(1, theme.skyBot);
       ctx.fillStyle = sky;
-      ctx.fillRect(-16, -16, canvas.width + 32, canvas.height + 32);
+      ctx.fillRect(-120, -120, canvas.width + 240, canvas.height + 450 * scaleY);
 
       if (theme.stars) {
         ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
         for (let s = 0; s < 26; s++) {
-          const sx = ((s * 97 + 31) % WORLD_W) * scaleX;
+          const sx = wx((s * 97 + 31) % WORLD_W);
           const sy = wy(360 + ((s * 53) % 220));
           const twinkle = 0.4 + 0.6 * Math.abs(Math.sin(now * 0.002 + s));
           ctx.globalAlpha = twinkle;
@@ -833,29 +934,29 @@ export default function Field({
       // Parallax background mountains
       ctx.fillStyle = theme.hillFar;
       ctx.beginPath();
-      ctx.moveTo(0, canvas.height);
-      for (let x = 0; x <= WORLD_W; x += 40) {
+      ctx.moveTo(-64, canvas.height + 300 * scaleY);
+      for (let x = -100; x <= WORLD_W + 100; x += 40) {
         const mh =
           230 +
           55 * Math.sin(x * 0.0055 + 1.1) +
           30 * Math.cos(x * 0.012 + 0.4);
         ctx.lineTo(wx(x), wy(mh));
       }
-      ctx.lineTo(canvas.width, canvas.height);
+      ctx.lineTo(canvas.width + 64, canvas.height + 300 * scaleY);
       ctx.closePath();
       ctx.fill();
 
       ctx.fillStyle = theme.hillNear;
       ctx.beginPath();
-      ctx.moveTo(0, canvas.height);
-      for (let x = 0; x <= WORLD_W; x += 30) {
+      ctx.moveTo(-64, canvas.height + 300 * scaleY);
+      for (let x = -100; x <= WORLD_W + 100; x += 30) {
         const mh =
           185 +
           40 * Math.sin(x * 0.008 + 2.5) +
           22 * Math.sin(x * 0.017 + 0.9);
         ctx.lineTo(wx(x), wy(mh));
       }
-      ctx.lineTo(canvas.width, canvas.height);
+      ctx.lineTo(canvas.width + 64, canvas.height + 300 * scaleY);
       ctx.closePath();
       ctx.fill();
 
@@ -914,19 +1015,18 @@ export default function Field({
       }
 
       // --- 2. Multi-layer Terrain ---
-      // Deep earth body
+      // Deep earth body (extended downwards and sideways so camera never exposes gaps)
       ctx.beginPath();
-      ctx.moveTo(0, canvas.height);
-      // Smooth surface through the column centers (same as the mobiles' contact)
-      ctx.lineTo(wx(0), wy(drawGround[0] ?? 0));
+      ctx.moveTo(-64, canvas.height + 300 * scaleY);
+      ctx.lineTo(wx(-100), wy(drawGround[0] ?? 0));
       for (let i = 0; i < COLS; i++) {
         ctx.lineTo(wx(i * COL_W + COL_W / 2), wy(drawGround[i] ?? 0));
       }
-      ctx.lineTo(wx(WORLD_W), wy(drawGround[COLS - 1] ?? 0));
-      ctx.lineTo(canvas.width, canvas.height);
+      ctx.lineTo(wx(WORLD_W + 100), wy(drawGround[COLS - 1] ?? 0));
+      ctx.lineTo(canvas.width + 64, canvas.height + 300 * scaleY);
       ctx.closePath();
 
-      const earthGrad = ctx.createLinearGradient(0, wy(420), 0, canvas.height);
+      const earthGrad = ctx.createLinearGradient(0, wy(420), 0, canvas.height + 300 * scaleY);
       earthGrad.addColorStop(0, theme.topsoil);
       earthGrad.addColorStop(0.32, theme.earthMid);
       earthGrad.addColorStop(1, theme.earthDeep);
@@ -978,20 +1078,20 @@ export default function Field({
       }
       ctx.stroke();
 
-      // Dải nước biển bập bềnh ở đáy bản đồ (Ocean Water Surface)
+      // Dải nước biển bập bềnh ở đáy bản đồ (Ocean Water Surface - extended)
       ctx.save();
       ctx.beginPath();
-      ctx.moveTo(0, canvas.height);
-      for (let x = 0; x <= WORLD_W; x += 15) {
+      ctx.moveTo(-64, canvas.height + 300 * scaleY);
+      for (let x = -100; x <= WORLD_W + 100; x += 15) {
         const wyWater =
           16 +
           Math.sin(now * 0.004 + x * 0.035) * 3.2 +
           Math.cos(now * 0.008 + x * 0.075) * 1.6;
         ctx.lineTo(wx(x), wy(wyWater));
       }
-      ctx.lineTo(canvas.width, canvas.height);
+      ctx.lineTo(canvas.width + 64, canvas.height + 300 * scaleY);
       ctx.closePath();
-      const oceanGrad = ctx.createLinearGradient(0, wy(24), 0, canvas.height);
+      const oceanGrad = ctx.createLinearGradient(0, wy(24), 0, canvas.height + 300 * scaleY);
       oceanGrad.addColorStop(0, "rgba(56, 189, 248, 0.75)");
       oceanGrad.addColorStop(0.35, "rgba(14, 165, 233, 0.85)");
       oceanGrad.addColorStop(1, "rgba(3, 105, 161, 0.95)");
@@ -2024,8 +2124,9 @@ export default function Field({
     const v = rotated
       ? (rect.right - clientX) / rect.width
       : (clientY - rect.top) / rect.height;
-    const px = u * WORLD_W;
-    const py = (1 - v) * WORLD_H;
+    // Screen-to-World with Camera Offset
+    const px = u * WORLD_W + currentCamRef.current.x;
+    const py = (1 - v) * WORLD_H + currentCamRef.current.y;
 
     const ty = tankY(curState.ground, curActualX);
     const dx = px - curActualX;
@@ -2039,29 +2140,254 @@ export default function Field({
   };
 
   return (
-    <canvas
-      ref={canvasRef}
-      aria-label="Chiến trường"
-      data-testid="field"
-      data-shot-n={finishedShotN}
-      data-animating-shot-n={activePlayback?.shot.n ?? 0}
-      onPointerDown={(e) => {
-        if (!playable || activePlayback) return;
-        draggingRef.current = true;
-        e.currentTarget.setPointerCapture(e.pointerId);
-        updateAngleFromPointer(e.clientX, e.clientY);
-      }}
-      onPointerMove={(e) => {
-        if (!draggingRef.current) return;
-        updateAngleFromPointer(e.clientX, e.clientY);
-      }}
-      onPointerUp={() => {
-        draggingRef.current = false;
-      }}
-      onPointerCancel={() => {
-        draggingRef.current = false;
-      }}
-      className="block h-full w-full touch-none select-none"
-    />
+    <div className="relative h-full w-full select-none overflow-hidden">
+      <canvas
+        ref={canvasRef}
+        aria-label="Chiến trường"
+        data-testid="field"
+        data-shot-n={finishedShotN}
+        data-animating-shot-n={activePlayback?.shot.n ?? 0}
+        onContextMenu={(e) => e.preventDefault()}
+        onPointerDown={(e) => {
+          pointersRef.current.set(e.pointerId, {
+            clientX: e.clientX,
+            clientY: e.clientY,
+          });
+
+          const isMiddleOrRight = e.button === 1 || e.button === 2;
+          const isPan = panModeRef.current === "pan";
+          const isMulti = pointersRef.current.size >= 2;
+
+          if (isMiddleOrRight || isPan || isMulti) {
+            isPanningRef.current = true;
+            isAimingRef.current = false;
+            lastPanClientRef.current = { x: e.clientX, y: e.clientY };
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {}
+            return;
+          }
+
+          if (!playable || activePlayback) return;
+          isAimingRef.current = true;
+          isPanningRef.current = false;
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {}
+          updateAngleFromPointer(e.clientX, e.clientY);
+        }}
+        onPointerMove={(e) => {
+          const prev = pointersRef.current.get(e.pointerId);
+          pointersRef.current.set(e.pointerId, {
+            clientX: e.clientX,
+            clientY: e.clientY,
+          });
+
+          const isMulti = pointersRef.current.size >= 2;
+
+          if (isPanningRef.current || isMulti) {
+            if (!canvasRef.current) return;
+            const rect = canvasRef.current.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return;
+
+            const prevPos =
+              lastPanClientRef.current ??
+              (prev ? { x: prev.clientX, y: prev.clientY } : { x: e.clientX, y: e.clientY });
+            const dxClient = e.clientX - prevPos.x;
+            const dyClient = e.clientY - prevPos.y;
+            lastPanClientRef.current = { x: e.clientX, y: e.clientY };
+
+            const rotated = rect.height > rect.width;
+            const dGameX = rotated ? dyClient : dxClient;
+            const dGameY = rotated ? -dxClient : dyClient;
+
+            const scaleX = canvasRef.current.width / WORLD_W;
+            const scaleY = canvasRef.current.height / WORLD_H;
+
+            const dCamX = -dGameX / scaleX;
+            const dCamY = dGameY / scaleY;
+
+            const nextX = Math.max(-380, Math.min(380, targetCamRef.current.x + dCamX));
+            const nextY = Math.max(-240, Math.min(180, targetCamRef.current.y + dCamY));
+            targetCamRef.current = { x: nextX, y: nextY };
+            currentCamRef.current = { x: nextX, y: nextY };
+            return;
+          }
+
+          if (isAimingRef.current) {
+            updateAngleFromPointer(e.clientX, e.clientY);
+          }
+        }}
+        onPointerUp={(e) => {
+          pointersRef.current.delete(e.pointerId);
+          lastPanClientRef.current = null;
+          if (pointersRef.current.size === 0) {
+            isPanningRef.current = false;
+            isAimingRef.current = false;
+          } else if (pointersRef.current.size === 1) {
+            const [rem] = Array.from(pointersRef.current.values());
+            if (rem) {
+              lastPanClientRef.current = { x: rem.clientX, y: rem.clientY };
+            }
+          }
+        }}
+        onPointerCancel={(e) => {
+          pointersRef.current.delete(e.pointerId);
+          lastPanClientRef.current = null;
+          if (pointersRef.current.size === 0) {
+            isPanningRef.current = false;
+            isAimingRef.current = false;
+          }
+        }}
+        className="block h-full w-full touch-none select-none"
+      />
+
+      {/* Floating Camera D-Pad & Pan Controls */}
+      <div
+        className="pointer-events-auto absolute right-2 top-16 z-20 flex flex-col items-center gap-1.5 rounded-2xl border border-white/20 bg-zinc-950/70 p-1.5 shadow-2xl backdrop-blur-md sm:top-20"
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {/* Mode Toggle: [🎯 Ngắm] / [✋ Kéo] */}
+        <button
+          type="button"
+          aria-label="Chuyển chế độ ngắm / kéo màn hình"
+          title={
+            panMode === "aim"
+              ? "Đang ngắm bắn. Bấm để chuyển sang kéo rê màn hình"
+              : "Đang kéo rê. Bấm để chuyển sang ngắm bắn"
+          }
+          onClick={(e) => {
+            e.stopPropagation();
+            setPanMode((prev) => (prev === "aim" ? "pan" : "aim"));
+          }}
+          className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-extrabold tracking-wide shadow-md transition-all active:scale-95 ${
+            panMode === "pan"
+              ? "border border-amber-300 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-amber-500/40"
+              : "border border-white/15 bg-zinc-800/80 text-zinc-200 hover:bg-zinc-700 hover:text-white"
+          }`}
+        >
+          {panMode === "aim" ? (
+            <>
+              <span className="text-xs">🎯</span>
+              <span>Ngắm</span>
+            </>
+          ) : (
+            <>
+              <span className="text-xs">✋</span>
+              <span>Kéo</span>
+            </>
+          )}
+        </button>
+
+        {/* Directional Pad Grid (3x3) */}
+        <div className="grid grid-cols-3 gap-1">
+          {/* Row 1 */}
+          <div />
+          <button
+            type="button"
+            aria-label="Nâng góc nhìn lên (thấy vực sâu)"
+            title="Nâng góc nhìn lên (thấy vực sâu)"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {}
+              startCamHold(0, -50);
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              stopCamHold();
+            }}
+            onPointerCancel={stopCamHold}
+            onLostPointerCapture={stopCamHold}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-zinc-800/80 text-xs font-bold text-zinc-100 shadow-sm transition-transform hover:bg-zinc-700 active:scale-90 active:bg-pink-600/80 sm:h-8 sm:w-8 sm:text-sm"
+          >
+            ⬆️
+          </button>
+          <div />
+
+          {/* Row 2 */}
+          <button
+            type="button"
+            aria-label="Di chuyển màn hình sang trái"
+            title="Di chuyển màn hình sang trái"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {}
+              startCamHold(-60, 0);
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              stopCamHold();
+            }}
+            onPointerCancel={stopCamHold}
+            onLostPointerCapture={stopCamHold}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-zinc-800/80 text-xs font-bold text-zinc-100 shadow-sm transition-transform hover:bg-zinc-700 active:scale-90 active:bg-pink-600/80 sm:h-8 sm:w-8 sm:text-sm"
+          >
+            ⬅️
+          </button>
+          <button
+            type="button"
+            aria-label="Căn tâm xe / Chuẩn hóa góc nhìn"
+            title="Căn tâm xe / Chuẩn hóa góc nhìn"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCenterCamera();
+            }}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-pink-300/40 bg-pink-500/80 text-xs font-bold text-white shadow-sm transition-transform hover:bg-pink-600 active:scale-90 sm:h-8 sm:w-8 sm:text-sm"
+          >
+            🎯
+          </button>
+          <button
+            type="button"
+            aria-label="Di chuyển màn hình sang phải"
+            title="Di chuyển màn hình sang phải"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {}
+              startCamHold(60, 0);
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              stopCamHold();
+            }}
+            onPointerCancel={stopCamHold}
+            onLostPointerCapture={stopCamHold}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-zinc-800/80 text-xs font-bold text-zinc-100 shadow-sm transition-transform hover:bg-zinc-700 active:scale-90 active:bg-pink-600/80 sm:h-8 sm:w-8 sm:text-sm"
+          >
+            ➡️
+          </button>
+
+          {/* Row 3 */}
+          <div />
+          <button
+            type="button"
+            aria-label="Hạ góc nhìn xuống"
+            title="Hạ góc nhìn xuống"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {}
+              startCamHold(0, 50);
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation();
+              stopCamHold();
+            }}
+            onPointerCancel={stopCamHold}
+            onLostPointerCapture={stopCamHold}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-zinc-800/80 text-xs font-bold text-zinc-100 shadow-sm transition-transform hover:bg-zinc-700 active:scale-90 active:bg-pink-600/80 sm:h-8 sm:w-8 sm:text-sm"
+          >
+            ⬇️
+          </button>
+          <div />
+        </div>
+      </div>
+    </div>
   );
 }
